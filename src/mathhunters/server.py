@@ -119,6 +119,18 @@ class HunterHandler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict[str, Any], status: int = HTTPStatus.OK) -> None:
         self._send(status, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8")
 
+    def _drain_body(self) -> None:
+        """Consume an unread request body so keep-alive stays in sync.
+
+        ``sendBeacon`` and friends may attach one even where none is needed.
+        """
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if 0 < length <= MAX_BODY_BYTES:
+            self.rfile.read(length)
+
     def _read_json(self) -> dict[str, Any]:
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -197,9 +209,23 @@ class HunterHandler(BaseHTTPRequestHandler):
                 self._send_json(self._answer(series, self._read_json()))
                 return
             if parts[3] == "restart":
+                self._drain_body()
                 with self.store.lock:
                     series.restart()
                     series.next_problem()
+                    series.resume()
+                    self.store.save()
+                self._send_json(self._series_payload(series))
+                return
+            if parts[3] in ("pause", "resume"):
+                # Sent when the player leaves for HQ or the tab goes away, and
+                # again when they come back to it.
+                self._drain_body()
+                with self.store.lock:
+                    if parts[3] == "pause":
+                        series.pause()
+                    elif not series.is_mastered:
+                        series.resume()
                     self.store.save()
                 self._send_json(self._series_payload(series))
                 return
@@ -259,6 +285,7 @@ class HunterHandler(BaseHTTPRequestHandler):
             if restart or series.is_mastered:
                 series.restart()
             series.next_problem()
+            series.resume()  # the session clock runs while the hunt is open
             self.store.save()
             return self._series_payload(series)
 

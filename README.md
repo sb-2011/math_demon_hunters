@@ -52,6 +52,23 @@ orientations of the same numbers are tracked as separate hunts.
 Miss a sealed problem and the seal cracks: it drops to 1 and has to be earned
 back. Mastery means all of them are at 3 *at the same time*.
 
+### Hunt time
+
+Every hunt keeps its own clock, shown as **TIME** in the top-right while
+playing. It counts only time actually spent hunting:
+
+- it starts when the hunt is opened and ticks while playing
+- it **pauses** on the way back to HQ, and picks up where it left off on resume
+- it also pauses if the tab is hidden or closed, so a browser left open
+  overnight doesn't bank hours
+- it **freezes** the moment the series is mastered, and the total appears on the
+  celebration screen and on the hunt's card at HQ
+- replaying a mastered hunt starts a fresh clock, so times are comparable
+
+The total is saved with the rest of the progress, so a hunt resumed next week
+continues the same clock. It is kept on the server rather than in the browser,
+which means it can't drift if the page is reloaded.
+
 ### Beat the clock (optional)
 
 Flip **Beat the clock** on the home screen to give each problem a countdown —
@@ -105,7 +122,7 @@ Each past hunt shows a progress ring, how many demons are sealed, and how many
 times it's been cleared. Mastered hunts get a crown and a **Replay** button.
 
 **The hunt** — the picture (or the drawn demon), the countdown if it's on, the
-problem, three point pips for the current problem, a combo counter, and the
+problem, three point pips for the current problem, a hunt clock, a combo counter, and the
 *Hunt Board* at the bottom showing every problem in the pool with its points, so
 a kid can see exactly what's left. Answer with the on-screen keypad or the real
 keyboard (digits, `−`, `Backspace`, `Enter`, `Esc` to quit to HQ).
@@ -247,9 +264,9 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-103 tests covering the scoring rules, the countdown, the scheduler's freshness
-guarantees, save/restore, image packs (including awkward filenames), and the
-HTTP API.
+121 tests covering the scoring rules, the countdown, the hunt clock's
+pause/resume behaviour, the scheduler's freshness guarantees, save/restore,
+image packs (including awkward filenames), and the HTTP API.
 
 ---
 

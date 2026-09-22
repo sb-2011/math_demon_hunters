@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mathhunters import engine  # noqa: E402
 from mathhunters.engine import (  # noqa: E402
     MASTERY_TARGET,
     REVIEW_GAP,
@@ -25,6 +26,19 @@ from mathhunters.engine import (  # noqa: E402
     eligible_reviews,
     problem_weight,
 )
+
+
+class _FakeClock:
+    """Stand-in for ``time.time`` so clock tests are exact and instant."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 def make(fixed: int = 10, t1: int = 0, t2: int = 9, vary: str = "subtrahend") -> Series:
@@ -263,6 +277,133 @@ def test_timer_settings_survive_a_save_and_reload():
     restored = Series.from_dict(series.to_dict())
     assert restored.timer_enabled is True
     assert restored.timer_seconds == 25
+
+
+# --- session clock -----------------------------------------------------------
+
+
+def test_a_new_hunt_starts_with_a_stopped_clock_at_zero():
+    series = make()
+    assert series.elapsed_ms == 0
+    assert series.running is False
+
+
+def test_the_clock_accumulates_while_running(monkeypatch):
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(4.0)
+    assert 3900 <= series.elapsed_ms_now() <= 4100
+
+    series.pause()
+    assert 3900 <= series.elapsed_ms <= 4100
+    assert series.running is False
+
+
+def test_a_paused_clock_does_not_advance(monkeypatch):
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(5.0)
+    series.pause()
+    banked = series.elapsed_ms
+
+    clock.advance(600.0)  # ten minutes away at HQ
+    assert series.elapsed_ms_now() == banked
+
+
+def test_resuming_continues_from_where_it_stopped(monkeypatch):
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(6.0)
+    series.pause()
+
+    clock.advance(300.0)  # time at HQ is not counted
+    series.resume()
+    clock.advance(4.0)
+    series.pause()
+
+    assert 9900 <= series.elapsed_ms <= 10_100, "6s + 4s of play, not the gap between"
+
+
+def test_pausing_an_already_paused_hunt_is_harmless(monkeypatch):
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(3.0)
+    series.pause()
+    banked = series.elapsed_ms
+    series.pause()
+    series.pause()
+    assert series.elapsed_ms == banked
+
+
+def test_a_single_stretch_is_capped(monkeypatch):
+    """A browser closed without going back to HQ must not bank hours."""
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(10 * 3600)  # left running overnight
+    series.pause()
+    assert series.elapsed_ms == engine.MAX_CREDITED_STRETCH_S * 1000
+
+
+def test_finishing_a_hunt_stops_the_clock(monkeypatch):
+    series = make(10, 0, 1)
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+    series.resume()
+
+    for v in (0, 1):
+        for _ in range(MASTERY_TARGET):
+            clock.advance(2.0)
+            ask(series, v)
+
+    assert series.is_mastered
+    assert series.running is False, "a finished hunt should not keep counting"
+    frozen = series.elapsed_ms
+    clock.advance(1000.0)
+    assert series.elapsed_ms_now() == frozen
+
+
+def test_the_clock_survives_a_save_and_reload_but_loads_paused(monkeypatch):
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(7.0)
+    # Saved mid-hunt, while still running.
+    restored = Series.from_dict(series.to_dict())
+
+    assert 6900 <= restored.elapsed_ms <= 7100, "time played is kept"
+    assert restored.running is False, "a hunt cannot be running while the app is closed"
+
+
+def test_replaying_a_hunt_resets_its_clock(monkeypatch):
+    series = make()
+    clock = _FakeClock(1000.0)
+    monkeypatch.setattr(engine.time, "time", clock)
+
+    series.resume()
+    clock.advance(30.0)
+    series.pause()
+    assert series.elapsed_ms > 0
+
+    series.restart()
+    assert series.elapsed_ms == 0
+    assert series.running is False
 
 
 # --- rotation / freshness ----------------------------------------------------

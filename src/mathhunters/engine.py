@@ -52,6 +52,14 @@ TIMER_DEFAULT_SECONDS = 10
 TIMER_MIN_SECONDS = 3
 TIMER_MAX_SECONDS = 120
 
+# --- Session clock -----------------------------------------------------------
+
+# Longest single stretch credited to a hunt's clock between two events.  The
+# clock is re-anchored on every answer, so this only bites when nothing happens
+# for a long time -- a kid wandering off, or a browser closed without going back
+# to HQ.  It bounds how much dead time a crashed session can add.
+MAX_CREDITED_STRETCH_S = 300
+
 # --- Scheduler tuning --------------------------------------------------------
 
 UNSEEN_WEIGHT = 120.0  # make sure every problem gets introduced early
@@ -155,6 +163,11 @@ class Series:
     turn: int = 0
     last_review_turn: int = -999
     current_v: int | None = None
+    # Session clock: accumulated play time, plus the start of the stretch
+    # currently in progress.  ``running_since`` is deliberately never saved --
+    # a hunt cannot be running while the app is closed.
+    elapsed_ms: int = 0
+    running_since: float | None = None
     streak: int = 0
     best_streak: int = 0
     total_asked: int = 0
@@ -240,6 +253,40 @@ class Series:
     def is_mastered(self) -> bool:
         return self.pool_size > 0 and all(p.mastered for p in self.problems.values())
 
+    # -- session clock --------------------------------------------------------
+
+    @property
+    def running(self) -> bool:
+        return self.running_since is not None
+
+    def resume(self) -> None:
+        """Start the clock, or pick it up again after a break at HQ."""
+        self._bank_time()
+        self.running_since = time.time()
+        self.updated_at = time.time()
+
+    def pause(self) -> None:
+        """Stop the clock — going back to HQ, or finishing the hunt."""
+        if not self.running:
+            return
+        self._bank_time()
+        self.updated_at = time.time()
+
+    def _bank_time(self) -> None:
+        """Move the stretch in progress into the accumulated total."""
+        if self.running_since is None:
+            return
+        stretch = max(0.0, time.time() - self.running_since)
+        self.elapsed_ms += int(min(stretch, MAX_CREDITED_STRETCH_S) * 1000)
+        self.running_since = None
+
+    def elapsed_ms_now(self) -> int:
+        """Total play time including the stretch currently in progress."""
+        if self.running_since is None:
+            return self.elapsed_ms
+        stretch = max(0.0, time.time() - self.running_since)
+        return self.elapsed_ms + int(min(stretch, MAX_CREDITED_STRETCH_S) * 1000)
+
     def restart(self) -> None:
         """Wipe point progress for a replay, keeping lifetime stats."""
         for problem in self.problems.values():
@@ -252,6 +299,9 @@ class Series:
         self.last_review_turn = -999
         self.current_v = None
         self.streak = 0
+        # A replay is a fresh attempt, so its clock starts from zero.
+        self.elapsed_ms = 0
+        self.running_since = None
         self.updated_at = time.time()
 
     # -- gameplay -------------------------------------------------------------
@@ -327,6 +377,11 @@ class Series:
         if series_mastered:
             self.completions += 1
             self.last_mastered_at = time.time()
+            self.pause()  # the hunt is over; freeze the final time
+        else:
+            # Re-anchor the clock each answer so one long pause cannot be
+            # credited as play time in bulk.
+            self.resume()
 
         return {
             "correct": correct,
@@ -371,6 +426,9 @@ class Series:
             "problems": [p.to_dict() for p in self.ordered_problems()],
             "turn": self.turn,
             "last_review_turn": self.last_review_turn,
+            # Only the banked total is saved; a stretch in progress is closed
+            # first, so a hunt always loads paused.
+            "elapsed_ms": self.elapsed_ms_now(),
             "current_v": self.current_v,
             "streak": self.streak,
             "best_streak": self.best_streak,
@@ -396,6 +454,7 @@ class Series:
             timer_seconds=clamp_timer_seconds(data.get("timer_seconds", TIMER_DEFAULT_SECONDS)),
             turn=int(data.get("turn", 0)),
             last_review_turn=int(data.get("last_review_turn", -999)),
+            elapsed_ms=max(0, int(data.get("elapsed_ms", 0))),
             streak=int(data.get("streak", 0)),
             best_streak=int(data.get("best_streak", 0)),
             total_asked=int(data.get("total_asked", 0)),
@@ -431,6 +490,8 @@ class Series:
             "label": self.label,
             "timer_enabled": self.timer_enabled,
             "timer_seconds": self.timer_seconds,
+            "elapsed_ms": self.elapsed_ms_now(),
+            "running": self.running,
             "pool_size": self.pool_size,
             "mastered_count": self.mastered_count,
             "points_earned": self.points_earned,

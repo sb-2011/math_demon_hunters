@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -381,6 +382,102 @@ def test_a_timeout_needs_no_answer_field(client):
     client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
     assert client("POST", "/api/series/s10-0-4/answer", {"timed_out": True})[0] == 200
     assert client("POST", "/api/series/s10-0-4/answer", {})[0] == 400
+
+
+# --- session clock -----------------------------------------------------------
+
+
+def test_opening_a_hunt_starts_its_clock(client):
+    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    assert data["running"] is True
+    assert data["elapsed_ms"] >= 0
+
+
+def test_going_back_to_hq_pauses_the_clock(client):
+    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    answer_correctly(client, data)
+    time.sleep(0.2)
+
+    status, paused = client("POST", "/api/series/s10-0-4/pause")
+    assert status == 200
+    assert paused["running"] is False
+    banked = paused["elapsed_ms"]
+    assert banked > 0
+
+    time.sleep(0.3)  # sitting at HQ
+    _, boot = client("GET", "/api/bootstrap")
+    assert boot["series"][0]["elapsed_ms"] == banked, "a paused hunt must not tick"
+
+
+def test_resuming_a_hunt_continues_its_clock(client):
+    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    time.sleep(0.2)
+    _, paused = client("POST", "/api/series/s10-0-4/pause")
+    banked = paused["elapsed_ms"]
+
+    time.sleep(0.3)  # away
+    _, resumed = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    assert resumed["running"] is True
+    assert resumed["elapsed_ms"] >= banked
+    assert resumed["elapsed_ms"] < banked + 250, "the time spent at HQ must not be counted"
+
+
+def test_the_resume_endpoint_restarts_the_clock(client):
+    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    client("POST", "/api/series/s10-0-4/pause")
+    status, resumed = client("POST", "/api/series/s10-0-4/resume")
+    assert status == 200
+    assert resumed["running"] is True
+
+
+def test_the_clock_survives_the_app_being_closed(client, tmp_path):
+    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    time.sleep(0.2)
+    _, paused = client("POST", "/api/series/s10-0-4/pause")
+
+    reopened = Store(tmp_path / "data")
+    restored = reopened.get("s10-0-4")
+    assert restored is not None
+    assert restored.elapsed_ms == paused["elapsed_ms"]
+    assert restored.running is False, "a reloaded hunt is never mid-session"
+
+
+def test_a_mastered_hunt_stops_and_reports_its_time(client):
+    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    payload = solve_series(client, start)
+    assert payload["running"] is False
+    frozen = payload["elapsed_ms"]
+
+    time.sleep(0.25)
+    _, boot = client("GET", "/api/bootstrap")
+    assert boot["series"][0]["elapsed_ms"] == frozen
+
+
+def test_resume_does_not_restart_a_finished_hunt(client):
+    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    solve_series(client, start)
+    _, data = client("POST", "/api/series/s6-0-2/resume")
+    assert data["running"] is False
+
+
+def test_replaying_a_hunt_resets_its_clock(client):
+    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    time.sleep(0.2)
+    solve_series(client, start)
+
+    _, replay = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    assert replay["elapsed_ms"] < 100, "a replay starts a fresh clock"
+    assert replay["running"] is True
+
+
+def test_pause_tolerates_a_body_from_sendbeacon(client):
+    """navigator.sendBeacon may attach a payload; the connection must survive."""
+    client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    status, data = client("POST", "/api/series/s10-0-4/pause", {"ignored": "beacon"})
+    assert status == 200
+    assert data["running"] is False
+    # The next request on the same server must still work.
+    assert client("GET", "/api/bootstrap")[0] == 200
 
 
 # --- image packs -------------------------------------------------------------

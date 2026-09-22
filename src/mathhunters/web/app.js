@@ -310,7 +310,7 @@
           <div>
             <p class="hunt-card__name">${seriesLabel(s)}</p>
             <p class="hunt-card__meta">${s.mastered_count}/${s.pool_size} sealed${s.completions ? ` · cleared ×${s.completions}` : ""}</p>
-            <p class="hunt-card__meta">best combo ${s.best_streak}</p>
+            <p class="hunt-card__meta">⏱ ${formatDuration(s.elapsed_ms)} · best combo ${s.best_streak}</p>
           </div>
         </div>
         <div class="hunt-card__actions">
@@ -342,6 +342,7 @@
       setVary(data.vary);
       preloadPack();
       show("screen-play");
+      startSessionClock(data);
       renderPlay();
       focusAnswer();
       sfx("key");
@@ -401,6 +402,70 @@
   /** Whichever artwork is on screen — the pack picture or the drawn demon. */
   function visualTarget() {
     return $("pack-card").hidden ? $("demon") : $("pack-card");
+  }
+
+  /* -------------------------- session clock ----------------------------- */
+
+  /** mm:ss, or h:mm:ss once a hunt passes an hour. */
+  function formatDuration(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    const seconds = String(total % 60).padStart(2, "0");
+    const minutes = total < 3600 ? String(Math.floor(total / 60)) : String(Math.floor(total / 60) % 60).padStart(2, "0");
+    return total < 3600 ? `${minutes}:${seconds}` : `${Math.floor(total / 3600)}:${minutes}:${seconds}`;
+  }
+
+  let sessionTimer = null;
+  let sessionBase = 0;    // elapsed_ms the server last reported
+  let sessionAnchor = 0;  // performance.now() at that moment
+
+  function sessionElapsed() {
+    return sessionBase + (sessionTimer ? performance.now() - sessionAnchor : 0);
+  }
+
+  function startSessionClock(series) {
+    // The server owns the total; the client just ticks between updates.
+    sessionBase = series.elapsed_ms || 0;
+    sessionAnchor = performance.now();
+    $("session").classList.remove("session--paused");
+    clearInterval(sessionTimer);
+    $("session-n").textContent = formatDuration(sessionBase);
+    sessionTimer = setInterval(() => {
+      $("session-n").textContent = formatDuration(sessionElapsed());
+    }, 500);
+  }
+
+  function stopSessionClock() {
+    if (sessionTimer) {
+      sessionBase = sessionElapsed();
+      clearInterval(sessionTimer);
+      sessionTimer = null;
+    }
+    $("session").classList.add("session--paused");
+    $("session-n").textContent = formatDuration(sessionBase);
+  }
+
+  /** Tell the server to stop counting. Survives the tab being closed. */
+  function pauseSession(useBeacon = false) {
+    const series = state.series;
+    stopSessionClock();
+    if (!series || !series.id) return Promise.resolve();
+    const url = `/api/series/${series.id}/pause`;
+    if (useBeacon && navigator.sendBeacon) {
+      navigator.sendBeacon(url);
+      return Promise.resolve();
+    }
+    return api(url, { method: "POST" }).catch(() => {});
+  }
+
+  /** Pick the clock back up — returning to a tab that was hidden. */
+  async function resumeSession() {
+    const series = state.series;
+    if (!series || !series.id || series.is_mastered) return;
+    try {
+      const data = await api(`/api/series/${series.id}/resume`, { method: "POST" });
+      state.series = data;
+      startSessionClock(data);
+    } catch (_) { /* the clock is a nicety, never a blocker */ }
   }
 
   /* ------------------------------ clock --------------------------------- */
@@ -523,6 +588,9 @@
         body: { ...payload, elapsed_ms: elapsed },
       });
       state.series = data;
+      // Re-sync the clock with the server's total on every answer.
+      sessionBase = data.elapsed_ms || 0;
+      sessionAnchor = performance.now();
       playFeedback(data.result);
 
       if (data.result.series_mastered) {
@@ -670,6 +738,7 @@
 
   function celebrate(s) {
     stopClock();
+    stopSessionClock();  // the server froze the hunt's time on mastery
     const accuracy = s.total_asked ? Math.round((s.total_correct / s.total_asked) * 100) : 100;
     $("victory-series").textContent = seriesLabel(s);
 
@@ -682,9 +751,9 @@
       .join("");
     $("victory-stats").innerHTML = `
       <div class="stat"><span class="stat__n">${s.pool_size}</span><span class="stat__l">demons sealed</span></div>
+      <div class="stat"><span class="stat__n">${formatDuration(s.elapsed_ms)}</span><span class="stat__l">hunt time</span></div>
       <div class="stat"><span class="stat__n">${accuracy}%</span><span class="stat__l">accuracy</span></div>
-      <div class="stat"><span class="stat__n">${s.best_streak}</span><span class="stat__l">best combo</span></div>
-      <div class="stat"><span class="stat__n">${s.completions}</span><span class="stat__l">times cleared</span></div>`;
+      <div class="stat"><span class="stat__n">${s.best_streak}</span><span class="stat__l">best combo</span></div>`;
 
     $("victory").classList.add("victory--on");
     $("victory").setAttribute("aria-hidden", "false");
@@ -700,6 +769,8 @@
   async function returnHome() {
     cancelAnimationFrame(confettiTimer);
     stopClock();
+    // Leaving mid-hunt stops the clock; it picks up where it left off on resume.
+    await pauseSession();
     $("victory").classList.remove("victory--on");
     $("victory").setAttribute("aria-hidden", "true");
     state.busy = false;
@@ -866,6 +937,15 @@
 
     // Tapping the equation returns focus to the answer box.
     $("answer").addEventListener("focus", () => $("answer").setSelectionRange(99, 99));
+
+    // Closing or hiding the tab counts as stepping away: stop the hunt's clock
+    // rather than letting the server keep counting an empty room.
+    addEventListener("pagehide", () => { if (state.series) pauseSession(true); });
+    document.addEventListener("visibilitychange", () => {
+      if (!state.series) return;
+      if (document.hidden) pauseSession(true);
+      else resumeSession();
+    });
   }
 
   function pressKey(key) {
