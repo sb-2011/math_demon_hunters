@@ -1,0 +1,22 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# Custom UI artwork is personal (and often not redistributable) — the slot
+# documentation is tracked, the files themselves are not.
+assets/*
+!assets/README.md
+
+# Image packs: keep the structure, the docs and the built-in demo pack.
+# Pictures you download yourself stay untracked.
+images/**
+!images/README.md
+!images/*/
+!images/*/.gitkeep
+!images/example-theme/**
