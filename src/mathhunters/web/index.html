@@ -50,49 +50,65 @@
     <h2 class="panel__title">⟡ Forge a Hunt</h2>
 
     <div class="forge">
-      <div class="modes" role="radiogroup" aria-label="Which side changes?">
-        <button type="button" class="mode mode--on" data-vary="subtrahend" role="radio" aria-checked="true">
-          <span class="mode__eq"><b>A</b> <i>−</i> <em>▢</em></span>
-          <span class="mode__name">Same start number</span>
-          <span class="mode__desc">Fix <b>A</b>, take away each number in the range</span>
-        </button>
-        <button type="button" class="mode" data-vary="minuend" role="radio" aria-checked="false">
-          <span class="mode__eq"><em>▢</em> <i>−</i> <b>B</b></span>
-          <span class="mode__name">Same take-away</span>
-          <span class="mode__desc">Fix <b>B</b>, start from each number in the range</span>
-        </button>
+      <div class="sides">
+        <div class="side" data-side="m" data-mode="one">
+          <span class="side__title">Start number</span>
+          <div class="side__modes" role="radiogroup" aria-label="Start number: one number or a range">
+            <button type="button" class="side__mode side__mode--on" data-mode="one" role="radio" aria-checked="true">One number</button>
+            <button type="button" class="side__mode" data-mode="range" role="radio" aria-checked="false">A range</button>
+          </div>
+          <div class="side__fields">
+            <label class="stepper" data-field="m1">
+              <span class="stepper__label" data-role="first-label">Number</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease lowest start number">−</button>
+                <input id="input-m1" class="stepper__input" type="text" inputmode="numeric" value="10" aria-label="Lowest start number" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase lowest start number">+</button>
+              </span>
+            </label>
+            <span class="side__dash" data-role="dash">→</span>
+            <label class="stepper stepper--to" data-field="m2">
+              <span class="stepper__label">To</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease highest start number">−</button>
+                <input id="input-m2" class="stepper__input" type="text" inputmode="numeric" value="12" aria-label="Highest start number" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase highest start number">+</button>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <span class="sides__op" aria-hidden="true">−</span>
+
+        <div class="side" data-side="s" data-mode="range">
+          <span class="side__title">Take away</span>
+          <div class="side__modes" role="radiogroup" aria-label="Take away: one number or a range">
+            <button type="button" class="side__mode" data-mode="one" role="radio" aria-checked="false">One number</button>
+            <button type="button" class="side__mode side__mode--on" data-mode="range" role="radio" aria-checked="true">A range</button>
+          </div>
+          <div class="side__fields">
+            <label class="stepper" data-field="s1">
+              <span class="stepper__label" data-role="first-label">From</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease smallest take-away">−</button>
+                <input id="input-s1" class="stepper__input" type="text" inputmode="numeric" value="0" aria-label="Smallest take-away" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase smallest take-away">+</button>
+              </span>
+            </label>
+            <span class="side__dash" data-role="dash">→</span>
+            <label class="stepper stepper--to" data-field="s2">
+              <span class="stepper__label">To</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease largest take-away">−</button>
+                <input id="input-s2" class="stepper__input" type="text" inputmode="numeric" value="9" aria-label="Largest take-away" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase largest take-away">+</button>
+              </span>
+            </label>
+          </div>
+        </div>
       </div>
 
-      <div class="forge__row">
-        <label class="stepper" data-field="fixed">
-          <span class="stepper__label" id="fixed-label">Start number <b>A</b></span>
-          <span class="stepper__controls">
-            <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease fixed number">−</button>
-            <input id="input-fixed" class="stepper__input" type="text" inputmode="numeric" value="10" aria-label="Fixed number" />
-            <button type="button" class="stepper__btn" data-step="1" aria-label="increase fixed number">+</button>
-          </span>
-        </label>
-      </div>
-
-      <div class="forge__row forge__row--pair">
-        <label class="stepper" data-field="t1">
-          <span class="stepper__label">Range from</span>
-          <span class="stepper__controls">
-            <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease range start">−</button>
-            <input id="input-t1" class="stepper__input" type="text" inputmode="numeric" value="0" aria-label="Range start" />
-            <button type="button" class="stepper__btn" data-step="1" aria-label="increase range start">+</button>
-          </span>
-        </label>
-        <span class="forge__dash">→</span>
-        <label class="stepper" data-field="t2">
-          <span class="stepper__label">Range to</span>
-          <span class="stepper__controls">
-            <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease range end">−</button>
-            <input id="input-t2" class="stepper__input" type="text" inputmode="numeric" value="9" aria-label="Range end" />
-            <button type="button" class="stepper__btn" data-step="1" aria-label="increase range end">+</button>
-          </span>
-        </label>
-      </div>
+      <p class="forge__shape" id="forge-shape">10 − [0…9]</p>
 
       <div class="preview">
         <span class="preview__label" id="preview-count">10 demons in this hunt</span>
@@ -100,6 +116,22 @@
       </div>
 
       <div class="options">
+        <label class="switch">
+          <input type="checkbox" id="negative-toggle" />
+          <span class="switch__track"><span class="switch__knob"></span></span>
+          <span class="switch__text">
+            <b>Allow answers below zero</b>
+            <small>Keeps problems like 3 − 8 = −5 — with this off they are left out of the hunt</small>
+          </span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="strategy-toggle" checked />
+          <span class="switch__track"><span class="switch__knob"></span></span>
+          <span class="switch__text">
+            <b>Show the strategy picture</b>
+            <small>When a problem can be broken apart — like bridging through 10 — draw it, with the smaller steps to fill in</small>
+          </span>
+        </label>
         <label class="switch">
           <input type="checkbox" id="timer-toggle" />
           <span class="switch__track"><span class="switch__knob"></span></span>
@@ -225,6 +257,15 @@
       </div>
       <div class="flash" id="flash" aria-live="polite"></div>
 
+      <!-- Shown only when a strategy covers this problem (see strategies.js). -->
+      <section id="strategy" class="strat" hidden>
+        <h3 class="strat__title" id="strat-title"></h3>
+        <p class="strat__caption" id="strat-caption"></p>
+        <div class="strat__picture" id="strat-picture"></div>
+        <div class="strat__steps" id="strat-steps"></div>
+        <p class="strat__sum" id="strat-sum"></p>
+      </section>
+
       <div class="keypad" id="keypad">
         <button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button>
         <button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button>
@@ -266,6 +307,7 @@
   </div>
 </div>
 
+<script src="/static/strategies.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

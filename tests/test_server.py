@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mathhunters import packs as packs_mod  # noqa: E402
-from mathhunters.engine import MASTERY_TARGET  # noqa: E402
+from mathhunters.engine import MASTERY_TARGET, MAX_POOL_SIZE  # noqa: E402
 from mathhunters.server import HunterServer, find_free_port  # noqa: E402
 from mathhunters.storage import Store  # noqa: E402
 
@@ -124,64 +124,82 @@ def test_bootstrap_reports_rules_and_empty_history(client):
     assert status == 200
     assert data["series"] == []
     assert data["rules"]["mastery_target"] == MASTERY_TARGET
-    assert data["rules"]["vary_sides"] == ["minuend", "subtrahend"]
+    assert data["rules"]["max_pool_size"] == MAX_POOL_SIZE
     assert data["assets"] == {}
 
 
 # --- starting a hunt ---------------------------------------------------------
 
 
-def test_fixed_minuend_series_asks_from_the_pool(client):
-    status, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 9, "vary": "subtrahend"})
+def test_one_start_number_asks_from_the_pool(client):
+    status, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
     assert status == 200
-    assert data["id"] == "s10-0-9"
+    assert data["id"] == "r10-10x0-9"
     assert data["pool_size"] == 10
     assert data["question"]["minuend"] == 10
     assert 0 <= data["question"]["subtrahend"] <= 9
     assert {p["text"] for p in data["problems"]} == {f"10 − {v}" for v in range(10)}
 
 
-def test_fixed_subtrahend_series_asks_from_the_pool(client):
-    status, data = client("POST", "/api/series", {"fixed": 3, "t1": 5, "t2": 12, "vary": "minuend"})
+def test_one_take_away_asks_from_the_pool(client):
+    status, data = client("POST", "/api/series", {"m1": 5, "m2": 12, "s1": 3, "s2": 3})
     assert status == 200
-    assert data["id"] == "m3-5-12"
+    assert data["id"] == "r5-12x3-3"
     assert data["pool_size"] == 8
     assert data["question"]["subtrahend"] == 3
     assert 5 <= data["question"]["minuend"] <= 12
     assert {p["text"] for p in data["problems"]} == {f"{v} − 3" for v in range(5, 13)}
 
 
+def test_a_range_on_both_sides_asks_from_the_whole_grid(client):
+    status, data = client("POST", "/api/series", {"m1": 10, "m2": 12, "s1": 0, "s2": 4})
+    assert status == 200
+    assert data["id"] == "r10-12x0-4"
+    assert data["label"] == "[10…12] − [0…4]"
+    assert data["pool_size"] == 15
+    assert {p["text"] for p in data["problems"]} == {
+        f"{m} − {s}" for m in range(10, 13) for s in range(5)
+    }
+
+
+def test_pairs_below_zero_are_left_out_unless_asked_for(client):
+    _, data = client("POST", "/api/series", {"m1": 0, "m2": 4, "s1": 0, "s2": 4})
+    assert data["pool_size"] == 15
+    assert all(p["minuend"] >= p["subtrahend"] for p in data["problems"])
+
+    _, allowed = client(
+        "POST", "/api/series", {"m1": 0, "m2": 4, "s1": 0, "s2": 4, "allow_negative": True}
+    )
+    assert allowed["pool_size"] == 25
+    assert allowed["id"] == "r0-4x0-4-neg"
+    assert allowed["id"] != data["id"], "the two pools are different hunts"
+
+
 def test_the_two_orientations_are_stored_separately(client):
-    client("POST", "/api/series", {"fixed": 4, "t1": 0, "t2": 6, "vary": "subtrahend"})
-    client("POST", "/api/series", {"fixed": 4, "t1": 0, "t2": 6, "vary": "minuend"})
+    client("POST", "/api/series", {"m1": 4, "m2": 4, "s1": 0, "s2": 6})
+    client("POST", "/api/series", {"m1": 4, "m2": 6, "s1": 4, "s2": 4})
     _, boot = client("GET", "/api/bootstrap")
-    assert {s["id"] for s in boot["series"]} == {"s4-0-6", "m4-0-6"}
-
-
-def test_vary_defaults_to_the_subtrahend(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
-    assert data["vary"] == "subtrahend"
-    assert data["id"] == "s10-0-4"
+    assert {s["id"] for s in boot["series"]} == {"r4-4x0-6", "r4-6x4-4"}
 
 
 # --- answering ---------------------------------------------------------------
 
 
 def test_a_correct_answer_scores_and_advances(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 9})
-    asked = data["question"]["v"]
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
+    asked = data["question"]["text"]
     status, data = answer_correctly(client, data)
     assert status == 200
     assert data["result"]["correct"] is True
     assert data["result"]["delta"] == 1
     assert data["question"] is not None
-    assert data["question"]["v"] != asked
+    assert data["question"]["text"] != asked
 
 
 def test_a_wrong_answer_reports_the_expected_value(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 9})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
     question = data["question"]
-    _, data = client("POST", "/api/series/s10-0-9/answer", {"answer": 999})
+    _, data = client("POST", "/api/series/r10-10x0-9/answer", {"answer": 999})
     assert data["result"]["correct"] is False
     assert data["result"]["expected"] == question["minuend"] - question["subtrahend"]
     assert data["result"]["points"] == 0
@@ -189,14 +207,17 @@ def test_a_wrong_answer_reports_the_expected_value(client):
 
 def test_absurd_answers_are_rejected_rather_than_scored(client):
     """The keypad caps at three digits; anything past that is a client bug."""
-    client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 9})
-    status, data = client("POST", "/api/series/s10-0-9/answer", {"answer": 12345})
+    client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
+    status, data = client("POST", "/api/series/r10-10x0-9/answer", {"answer": 12345})
     assert status == 400
     assert "error" in data
 
 
 def test_negative_answers_are_accepted(client):
-    _, data = client("POST", "/api/series", {"fixed": 2, "t1": 0, "t2": 6})
+    _, data = client(
+        "POST", "/api/series", {"m1": 2, "m2": 2, "s1": 0, "s2": 6, "allow_negative": True}
+    )
+    assert min(p["minuend"] - p["subtrahend"] for p in data["problems"]) == -4
     for _ in range(12):
         status, data = answer_correctly(client, data)
         assert status == 200
@@ -205,7 +226,7 @@ def test_negative_answers_are_accepted(client):
 
 def test_the_client_cannot_be_told_the_answer_before_replying(client):
     """The pending problem lives on the server; the payload never leaks the result."""
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 9})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
     assert "expected" not in data["question"]
     assert "answer" not in json.dumps(data["question"])
 
@@ -214,14 +235,50 @@ def test_the_client_cannot_be_told_the_answer_before_replying(client):
 
 
 def test_progress_survives_a_restart_of_the_store(client, tmp_path):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     _, data = answer_correctly(client, data)
     earned = data["points_earned"]
 
     reopened = Store(tmp_path / "data")
-    restored = reopened.get("s10-0-4")
+    restored = reopened.get("r10-10x0-4")
     assert restored is not None
     assert restored.points_earned == earned
+
+
+def test_a_profile_from_the_one_sided_app_still_loads_and_plays(client, tmp_path):
+    """Hunts saved before both sides could be ranges keep their progress."""
+    path = tmp_path / "old" / "progress.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "version": 1,
+        "series": [
+            {
+                "fixed": 10, "t1": 0, "t2": 4, "vary": "subtrahend",
+                "problems": [{"v": v, "points": 2, "asked": 2, "correct": 2} for v in range(5)],
+                "completions": 1, "best_streak": 7,
+            },
+            {
+                "fixed": 3, "t1": 5, "t2": 8, "vary": "minuend",
+                "problems": [{"v": v, "points": 1} for v in range(5, 9)],
+            },
+        ],
+    }))
+
+    store = Store(tmp_path / "old")
+    by_id = {s.id: s for s in store.all_series()}
+    assert set(by_id) == {"r10-10x0-4-neg", "r5-8x3-3-neg"}
+
+    carried_over = by_id["r10-10x0-4-neg"]
+    assert carried_over.label == "10 − [0…4]"
+    assert carried_over.points_earned == 10
+    assert carried_over.best_streak == 7 and carried_over.completions == 1
+
+    # And it is still a hunt the running app can open and answer.
+    client.server.store = store
+    status, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4, "allow_negative": True})
+    assert status == 200 and data["id"] == "r10-10x0-4-neg"
+    assert data["points_earned"] == 10
+    assert answer_correctly(client, data)[0] == 200
 
 
 def test_a_corrupt_profile_is_quarantined_rather_than_crashing(client, tmp_path):
@@ -238,7 +295,7 @@ def test_a_corrupt_profile_is_quarantined_rather_than_crashing(client, tmp_path)
 
 
 def test_mastering_a_series_reports_victory_and_lands_in_history(client):
-    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    _, start = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     payload = solve_series(client, start)
     assert payload["result"]["series_mastered"] is True
     assert payload["is_mastered"] is True
@@ -246,15 +303,15 @@ def test_mastering_a_series_reports_victory_and_lands_in_history(client):
     assert payload["question"] is None
 
     _, boot = client("GET", "/api/bootstrap")
-    assert boot["series"][0]["id"] == "s6-0-2"
+    assert boot["series"][0]["id"] == "r6-6x0-2"
     assert boot["series"][0]["completions"] == 1
 
 
 def test_replaying_a_mastered_series_starts_it_over(client):
-    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    _, start = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     solve_series(client, start)
 
-    status, data = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    status, data = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     assert status == 200
     assert data["points_earned"] == 0
     assert data["is_mastered"] is False
@@ -263,27 +320,27 @@ def test_replaying_a_mastered_series_starts_it_over(client):
 
 
 def test_resuming_an_unfinished_series_keeps_its_points(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     _, data = answer_correctly(client, data)
-    _, resumed = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, resumed = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     assert resumed["points_earned"] == data["points_earned"] == 1
 
 
 def test_restart_endpoint_resets_points(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     answer_correctly(client, data)
-    status, data = client("POST", "/api/series/s10-0-4/restart")
+    status, data = client("POST", "/api/series/r10-10x0-4/restart")
     assert status == 200
     assert data["points_earned"] == 0
     assert data["question"] is not None
 
 
 def test_deleting_a_series_removes_it(client):
-    client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
-    status, data = client("DELETE", "/api/series/s10-0-4")
+    client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
+    status, data = client("DELETE", "/api/series/r10-10x0-4")
     assert status == 200
     assert data["series"] == []
-    assert client("DELETE", "/api/series/s10-0-4")[0] == 404
+    assert client("DELETE", "/api/series/r10-10x0-4")[0] == 404
 
 
 # --- validation & safety -----------------------------------------------------
@@ -292,13 +349,14 @@ def test_deleting_a_series_removes_it(client):
 @pytest.mark.parametrize(
     "body",
     [
-        {"fixed": 10, "t1": 9, "t2": 0},
-        {"fixed": -5, "t1": 0, "t2": 9},
-        {"fixed": 10, "t1": 0, "t2": 500},
-        {"fixed": 10, "t1": 0, "t2": 60},
-        {"fixed": "ten", "t1": 0, "t2": 9},
-        {"t1": 0, "t2": 9},
-        {"fixed": 10, "t1": 0, "t2": 9, "vary": "sideways"},
+        {"m1": 10, "m2": 10, "s1": 9, "s2": 0},   # take-aways out of order
+        {"m1": 10, "m2": 5, "s1": 0, "s2": 9},    # start numbers out of order
+        {"m1": -5, "m2": 5, "s1": 0, "s2": 9},    # below zero
+        {"m1": 10, "m2": 10, "s1": 0, "s2": 1000},  # past the operand ceiling
+        {"m1": 0, "m2": 60, "s1": 0, "s2": 60},   # far too many problems
+        {"m1": "ten", "m2": 10, "s1": 0, "s2": 9},
+        {"s1": 0, "s2": 9},                       # no start numbers at all
+        {"m1": 0, "m2": 3, "s1": 5, "s2": 9},     # every pair would go below zero
     ],
 )
 def test_invalid_series_requests_are_rejected(client, body):
@@ -308,7 +366,7 @@ def test_invalid_series_requests_are_rejected(client, body):
 
 
 def test_unknown_series_and_routes_return_404(client):
-    assert client("POST", "/api/series/s99-0-9/answer", {"answer": 1})[0] == 404
+    assert client("POST", "/api/series/r99-99x0-9/answer", {"answer": 1})[0] == 404
     assert client("GET", "/api/nope")[0] == 404
     assert client("POST", "/api/series/bad-id/answer", {"answer": 1})[0] == 400
 
@@ -333,7 +391,7 @@ def test_path_traversal_is_blocked(client):
 
 
 def test_the_countdown_is_off_unless_asked_for(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     assert data["timer_enabled"] is False
     assert data["timer_seconds"] == 10
 
@@ -347,7 +405,7 @@ def test_the_countdown_can_be_enabled_and_timed(client):
     _, data = client(
         "POST",
         "/api/series",
-        {"fixed": 10, "t1": 0, "t2": 4, "timer_enabled": True, "timer_seconds": 20},
+        {"m1": 10, "m2": 10, "s1": 0, "s2": 4, "timer_enabled": True, "timer_seconds": 20},
     )
     assert data["timer_enabled"] is True
     assert data["timer_seconds"] == 20
@@ -355,22 +413,22 @@ def test_the_countdown_can_be_enabled_and_timed(client):
 
 def test_out_of_range_countdowns_are_clamped_not_rejected(client):
     _, data = client(
-        "POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4, "timer_enabled": True, "timer_seconds": 9999}
+        "POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4, "timer_enabled": True, "timer_seconds": 9999}
     )
     assert data["timer_seconds"] == 120
 
 
 def test_timer_settings_are_reapplied_when_a_hunt_is_reopened(client):
-    client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4, "timer_enabled": True, "timer_seconds": 15})
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4, "timer_enabled": False})
+    client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4, "timer_enabled": True, "timer_seconds": 15})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4, "timer_enabled": False})
     assert data["timer_enabled"] is False
     assert data["timer_seconds"] == 15, "the duration is remembered even when switched off"
 
 
 def test_a_timeout_is_scored_as_a_miss(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4, "timer_enabled": True})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4, "timer_enabled": True})
     question = data["question"]
-    status, data = client("POST", "/api/series/s10-0-4/answer", {"timed_out": True, "elapsed_ms": 10_000})
+    status, data = client("POST", "/api/series/r10-10x0-4/answer", {"timed_out": True, "elapsed_ms": 10_000})
     assert status == 200
     assert data["result"]["correct"] is False
     assert data["result"]["timed_out"] is True
@@ -379,26 +437,26 @@ def test_a_timeout_is_scored_as_a_miss(client):
 
 
 def test_a_timeout_needs_no_answer_field(client):
-    client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
-    assert client("POST", "/api/series/s10-0-4/answer", {"timed_out": True})[0] == 200
-    assert client("POST", "/api/series/s10-0-4/answer", {})[0] == 400
+    client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
+    assert client("POST", "/api/series/r10-10x0-4/answer", {"timed_out": True})[0] == 200
+    assert client("POST", "/api/series/r10-10x0-4/answer", {})[0] == 400
 
 
 # --- session clock -----------------------------------------------------------
 
 
 def test_opening_a_hunt_starts_its_clock(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     assert data["running"] is True
     assert data["elapsed_ms"] >= 0
 
 
 def test_going_back_to_hq_pauses_the_clock(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     answer_correctly(client, data)
     time.sleep(0.2)
 
-    status, paused = client("POST", "/api/series/s10-0-4/pause")
+    status, paused = client("POST", "/api/series/r10-10x0-4/pause")
     assert status == 200
     assert paused["running"] is False
     banked = paused["elapsed_ms"]
@@ -410,40 +468,40 @@ def test_going_back_to_hq_pauses_the_clock(client):
 
 
 def test_resuming_a_hunt_continues_its_clock(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     time.sleep(0.2)
-    _, paused = client("POST", "/api/series/s10-0-4/pause")
+    _, paused = client("POST", "/api/series/r10-10x0-4/pause")
     banked = paused["elapsed_ms"]
 
     time.sleep(0.3)  # away
-    _, resumed = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, resumed = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     assert resumed["running"] is True
     assert resumed["elapsed_ms"] >= banked
     assert resumed["elapsed_ms"] < banked + 250, "the time spent at HQ must not be counted"
 
 
 def test_the_resume_endpoint_restarts_the_clock(client):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
-    client("POST", "/api/series/s10-0-4/pause")
-    status, resumed = client("POST", "/api/series/s10-0-4/resume")
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
+    client("POST", "/api/series/r10-10x0-4/pause")
+    status, resumed = client("POST", "/api/series/r10-10x0-4/resume")
     assert status == 200
     assert resumed["running"] is True
 
 
 def test_the_clock_survives_the_app_being_closed(client, tmp_path):
-    _, data = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
     time.sleep(0.2)
-    _, paused = client("POST", "/api/series/s10-0-4/pause")
+    _, paused = client("POST", "/api/series/r10-10x0-4/pause")
 
     reopened = Store(tmp_path / "data")
-    restored = reopened.get("s10-0-4")
+    restored = reopened.get("r10-10x0-4")
     assert restored is not None
     assert restored.elapsed_ms == paused["elapsed_ms"]
     assert restored.running is False, "a reloaded hunt is never mid-session"
 
 
 def test_a_mastered_hunt_stops_and_reports_its_time(client):
-    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    _, start = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     payload = solve_series(client, start)
     assert payload["running"] is False
     frozen = payload["elapsed_ms"]
@@ -454,26 +512,26 @@ def test_a_mastered_hunt_stops_and_reports_its_time(client):
 
 
 def test_resume_does_not_restart_a_finished_hunt(client):
-    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    _, start = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     solve_series(client, start)
-    _, data = client("POST", "/api/series/s6-0-2/resume")
+    _, data = client("POST", "/api/series/r6-6x0-2/resume")
     assert data["running"] is False
 
 
 def test_replaying_a_hunt_resets_its_clock(client):
-    _, start = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    _, start = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     time.sleep(0.2)
     solve_series(client, start)
 
-    _, replay = client("POST", "/api/series", {"fixed": 6, "t1": 0, "t2": 2})
+    _, replay = client("POST", "/api/series", {"m1": 6, "m2": 6, "s1": 0, "s2": 2})
     assert replay["elapsed_ms"] < 100, "a replay starts a fresh clock"
     assert replay["running"] is True
 
 
 def test_pause_tolerates_a_body_from_sendbeacon(client):
     """navigator.sendBeacon may attach a payload; the connection must survive."""
-    client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 4})
-    status, data = client("POST", "/api/series/s10-0-4/pause", {"ignored": "beacon"})
+    client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 4})
+    status, data = client("POST", "/api/series/r10-10x0-4/pause", {"ignored": "beacon"})
     assert status == 200
     assert data["running"] is False
     # The next request on the same server must still work.
@@ -581,7 +639,7 @@ def test_every_problem_in_a_pool_gets_a_working_picture(client):
 
     _, boot = client("GET", "/api/bootstrap")
     images = boot["packs"][0]["images"]
-    _, series = client("POST", "/api/series", {"fixed": 10, "t1": 0, "t2": 9})
+    _, series = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
 
     # The client binds problem i to images[i % len(images)].
     for index, problem in enumerate(series["problems"]):

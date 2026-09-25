@@ -1,13 +1,19 @@
 """Scoring and problem-rotation logic for Math Demon Hunters.
 
-A *series* pins one side of the subtraction and sweeps a range over the other:
+A *series* is a range on each side of the subtraction:
 
-  * ``vary="subtrahend"`` -> ``fixed - v`` for every ``v`` in ``[t1, t2]``
-    (e.g. fixed 10 over 0…9 gives 10-0, 10-1, … 10-9)
-  * ``vary="minuend"``    -> ``v - fixed`` for every ``v`` in ``[t1, t2]``
-    (e.g. fixed 3 over 5…12 gives 5-3, 6-3, … 12-3)
+  * minuend range    ``[m1, m2]`` -- the numbers started from
+  * subtrahend range ``[s1, s2]`` -- the numbers taken away
 
-Exactly one side varies; the other is always a single number.
+The pool is every pair drawn from the two ranges.  A side pinned to a single
+number is just a range of width one, so the classic shapes still work:
+
+  * ``10…10 − 0…9``  -> 10-0, 10-1, … 10-9   (one start number)
+  * ``5…12 − 3…3``   -> 5-3, 6-3, … 12-3     (one take-away)
+  * ``10…12 − 0…4``  -> 10-0 … 12-4          (both sides sweep)
+
+Pairs that would go below zero are dropped unless ``allow_negative`` is set,
+so a wide pool stays inside what a kid has actually been taught.
 
 Each problem carries a point score in ``[0, MASTERY_TARGET]``:
 
@@ -33,7 +39,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 # --- Scoring rules -----------------------------------------------------------
 
@@ -85,10 +91,12 @@ REVIEW_MIN_STALENESS = 5  # a sealed problem must be unseen this long to be revi
 # --- Series limits -----------------------------------------------------------
 
 MAX_OPERAND = 999
-MAX_POOL_SIZE = 40
+# Two ranges multiply out fast, so the cap is on the finished pool rather than
+# on either range.  At three points per problem this is already a long hunt.
+MAX_POOL_SIZE = 64
 
-VaryingSide = Literal["minuend", "subtrahend"]
-VARY_SIDES: tuple[VaryingSide, ...] = ("minuend", "subtrahend")
+# A problem is identified by the pair it is built from.
+ProblemKey = tuple[int, int]
 
 MINUS = "−"  # typographic minus, so "10 − 4" lines up nicely
 
@@ -99,9 +107,10 @@ class SeriesError(ValueError):
 
 @dataclass
 class ProblemState:
-    """Per-problem progress inside a series, keyed by the varying operand."""
+    """Per-problem progress inside a series, keyed by its ``(m, s)`` pair."""
 
-    v: int
+    m: int
+    s: int
     points: int = 0
     asked: int = 0
     correct: int = 0
@@ -114,12 +123,25 @@ class ProblemState:
     last_ms: int | None = None
 
     @property
+    def key(self) -> ProblemKey:
+        return (self.m, self.s)
+
+    @property
+    def expected(self) -> int:
+        return self.m - self.s
+
+    @property
+    def text(self) -> str:
+        return f"{self.m} {MINUS} {self.s}"
+
+    @property
     def mastered(self) -> bool:
         return self.points >= MASTERY_TARGET
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "v": self.v,
+            "m": self.m,
+            "s": self.s,
             "points": self.points,
             "asked": self.asked,
             "correct": self.correct,
@@ -135,7 +157,8 @@ class ProblemState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProblemState":
         return cls(
-            v=int(data["v"]),
+            m=int(data["m"]),
+            s=int(data["s"]),
             points=_clamp(int(data.get("points", 0)), MIN_POINTS, MASTERY_TARGET),
             asked=int(data.get("asked", 0)),
             correct=int(data.get("correct", 0)),
@@ -151,18 +174,19 @@ class ProblemState:
 
 @dataclass
 class Series:
-    """One practice pool: one fixed operand against a range on the other side."""
+    """One practice pool: a range of minuends against a range of subtrahends."""
 
-    fixed: int
-    t1: int
-    t2: int
-    vary: VaryingSide = "subtrahend"
-    problems: dict[int, ProblemState] = field(default_factory=dict)
+    m1: int
+    m2: int
+    s1: int
+    s2: int
+    allow_negative: bool = False
+    problems: dict[ProblemKey, ProblemState] = field(default_factory=dict)
     timer_enabled: bool = False
     timer_seconds: int = TIMER_DEFAULT_SECONDS
     turn: int = 0
     last_review_turn: int = -999
-    current_v: int | None = None
+    current_key: ProblemKey | None = None
     # Session clock: accumulated play time, plus the start of the stretch
     # currently in progress.  ``running_since`` is deliberately never saved --
     # a hunt cannot be running while the app is closed.
@@ -180,49 +204,46 @@ class Series:
     # -- identity -------------------------------------------------------------
 
     @staticmethod
-    def make_id(fixed: int, t1: int, t2: int, vary: VaryingSide) -> str:
-        # The leading letter marks which side the range sweeps, so the two
-        # orientations of the same numbers stay separate hunts.
-        return f"{'m' if vary == 'minuend' else 's'}{fixed}-{t1}-{t2}"
+    def make_id(m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False) -> str:
+        # Allowing negatives changes which pairs are in the pool, so it belongs
+        # in the identity; the countdown, which changes nothing about the pool,
+        # does not.
+        return f"r{m1}-{m2}x{s1}-{s2}" + ("-neg" if allow_negative else "")
 
     @property
     def id(self) -> str:
-        return self.make_id(self.fixed, self.t1, self.t2, self.vary)
+        return self.make_id(self.m1, self.m2, self.s1, self.s2, self.allow_negative)
 
     @property
     def label(self) -> str:
-        span = f"[{self.t1}…{self.t2}]"
-        if self.vary == "minuend":
-            return f"{span} {MINUS} {self.fixed}"
-        return f"{self.fixed} {MINUS} {span}"
+        return f"{_span(self.m1, self.m2)} {MINUS} {_span(self.s1, self.s2)}"
 
     @classmethod
-    def create(cls, fixed: int, t1: int, t2: int, vary: VaryingSide = "subtrahend") -> "Series":
-        validate_series(fixed, t1, t2, vary)
-        series = cls(fixed=fixed, t1=t1, t2=t2, vary=vary)
-        series.problems = {v: ProblemState(v=v) for v in range(t1, t2 + 1)}
+    def create(
+        cls, m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False
+    ) -> "Series":
+        validate_series(m1, m2, s1, s2, allow_negative)
+        series = cls(m1=m1, m2=m2, s1=s1, s2=s2, allow_negative=allow_negative)
+        series.problems = {key: ProblemState(m=key[0], s=key[1]) for key in series.pool_keys()}
         return series
 
     # -- problem shape --------------------------------------------------------
 
-    def minuend(self, v: int) -> int:
-        return v if self.vary == "minuend" else self.fixed
+    def pool_keys(self) -> list[ProblemKey]:
+        """Every ``(minuend, subtrahend)`` pair this series practises."""
+        return build_pool(self.m1, self.m2, self.s1, self.s2, self.allow_negative)
 
-    def subtrahend(self, v: int) -> int:
-        return self.fixed if self.vary == "minuend" else v
+    def expected(self, key: ProblemKey) -> int:
+        return key[0] - key[1]
 
-    def expected(self, v: int) -> int:
-        return self.minuend(v) - self.subtrahend(v)
-
-    def text(self, v: int) -> str:
-        return f"{self.minuend(v)} {MINUS} {self.subtrahend(v)}"
+    def text(self, key: ProblemKey) -> str:
+        return f"{key[0]} {MINUS} {key[1]}"
 
     def problem_view(self, problem: ProblemState) -> dict[str, Any]:
         return {
-            "v": problem.v,
-            "minuend": self.minuend(problem.v),
-            "subtrahend": self.subtrahend(problem.v),
-            "text": self.text(problem.v),
+            "minuend": problem.m,
+            "subtrahend": problem.s,
+            "text": problem.text,
             "points": problem.points,
             "asked": problem.asked,
             "correct": problem.correct,
@@ -297,7 +318,7 @@ class Series:
             problem.relapse_due = None
         self.turn = 0
         self.last_review_turn = -999
-        self.current_v = None
+        self.current_key = None
         self.streak = 0
         # A replay is a fresh attempt, so its clock starts from zero.
         self.elapsed_ms = 0
@@ -309,12 +330,12 @@ class Series:
     def next_problem(self, rng: random.Random | None = None) -> ProblemState | None:
         """Pick (and remember) the problem to ask next."""
         if self.is_mastered:
-            self.current_v = None
+            self.current_key = None
             return None
-        if self.current_v is not None and self.current_v in self.problems:
-            return self.problems[self.current_v]
+        if self.current_key is not None and self.current_key in self.problems:
+            return self.problems[self.current_key]
         chosen = choose_problem(self, rng=rng)
-        self.current_v = chosen.v if chosen else None
+        self.current_key = chosen.key if chosen else None
         return chosen
 
     def answer(
@@ -328,13 +349,13 @@ class Series:
         A ``timed_out`` round scores exactly like a wrong answer -- the clock
         running out is the same signal as not knowing it yet.
         """
-        if self.current_v is None or self.current_v not in self.problems:
+        if self.current_key is None or self.current_key not in self.problems:
             raise SeriesError("no problem is currently pending")
         if value is None and not timed_out:
             raise SeriesError("an answer is required")
 
-        problem = self.problems[self.current_v]
-        expected = self.expected(problem.v)
+        problem = self.problems[self.current_key]
+        expected = problem.expected
         correct = (not timed_out) and value == expected
         was_mastered = problem.mastered
         before = problem.points
@@ -370,7 +391,7 @@ class Series:
         if was_mastered:
             self.last_review_turn = self.turn
         self.turn += 1
-        self.current_v = None
+        self.current_key = None
         self.updated_at = time.time()
 
         series_mastered = self.is_mastered
@@ -388,10 +409,9 @@ class Series:
             "expected": expected,
             "given": None if timed_out else value,
             "timed_out": timed_out,
-            "v": problem.v,
-            "minuend": self.minuend(problem.v),
-            "subtrahend": self.subtrahend(problem.v),
-            "text": self.text(problem.v),
+            "minuend": problem.m,
+            "subtrahend": problem.s,
+            "text": problem.text,
             "delta": problem.points - before,
             "points": problem.points,
             "slow": slow,
@@ -417,10 +437,11 @@ class Series:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "fixed": self.fixed,
-            "t1": self.t1,
-            "t2": self.t2,
-            "vary": self.vary,
+            "m1": self.m1,
+            "m2": self.m2,
+            "s1": self.s1,
+            "s2": self.s2,
+            "allow_negative": self.allow_negative,
             "timer_enabled": self.timer_enabled,
             "timer_seconds": self.timer_seconds,
             "problems": [p.to_dict() for p in self.ordered_problems()],
@@ -429,7 +450,7 @@ class Series:
             # Only the banked total is saved; a stretch in progress is closed
             # first, so a hunt always loads paused.
             "elapsed_ms": self.elapsed_ms_now(),
-            "current_v": self.current_v,
+            "current_key": list(self.current_key) if self.current_key else None,
             "streak": self.streak,
             "best_streak": self.best_streak,
             "total_asked": self.total_asked,
@@ -442,14 +463,17 @@ class Series:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Series":
-        fixed, t1, t2 = int(data["fixed"]), int(data["t1"]), int(data["t2"])
-        vary = data.get("vary", "subtrahend")
-        validate_series(fixed, t1, t2, vary)
+        data = migrate_series(data)
+        m1, m2 = int(data["m1"]), int(data["m2"])
+        s1, s2 = int(data["s1"]), int(data["s2"])
+        allow_negative = bool(data.get("allow_negative", False))
+        validate_series(m1, m2, s1, s2, allow_negative)
         series = cls(
-            fixed=fixed,
-            t1=t1,
-            t2=t2,
-            vary=vary,
+            m1=m1,
+            m2=m2,
+            s1=s1,
+            s2=s2,
+            allow_negative=allow_negative,
             timer_enabled=bool(data.get("timer_enabled", False)),
             timer_seconds=clamp_timer_seconds(data.get("timer_seconds", TIMER_DEFAULT_SECONDS)),
             turn=int(data.get("turn", 0)),
@@ -464,29 +488,29 @@ class Series:
             updated_at=float(data.get("updated_at", time.time())),
             last_mastered_at=data.get("last_mastered_at"),
         )
-        stored: dict[int, ProblemState] = {}
+        stored: dict[ProblemKey, ProblemState] = {}
         for raw in data.get("problems", []):
             problem = ProblemState.from_dict(raw)
-            stored[problem.v] = problem
-        # Rebuild from the range so a hand-edited file can never desync the pool.
-        series.problems = {v: stored.get(v, ProblemState(v=v)) for v in range(t1, t2 + 1)}
-        current_v = data.get("current_v")
-        series.current_v = (
-            int(current_v) if current_v is not None and int(current_v) in series.problems else None
-        )
+            stored[problem.key] = problem
+        # Rebuild from the ranges so a hand-edited file can never desync the pool.
+        series.problems = {
+            key: stored.get(key, ProblemState(m=key[0], s=key[1])) for key in series.pool_keys()
+        }
+        series.current_key = _as_key(data.get("current_key"), series.problems)
         return series
 
     def ordered_problems(self) -> list[ProblemState]:
-        return [self.problems[v] for v in sorted(self.problems)]
+        return [self.problems[key] for key in sorted(self.problems)]
 
     def summary(self) -> dict[str, Any]:
         """Compact view used by the home screen."""
         return {
             "id": self.id,
-            "fixed": self.fixed,
-            "t1": self.t1,
-            "t2": self.t2,
-            "vary": self.vary,
+            "m1": self.m1,
+            "m2": self.m2,
+            "s1": self.s1,
+            "s2": self.s2,
+            "allow_negative": self.allow_negative,
             "label": self.label,
             "timer_enabled": self.timer_enabled,
             "timer_seconds": self.timer_seconds,
@@ -514,23 +538,85 @@ class Series:
         return data
 
 
-def validate_series(fixed: int, t1: int, t2: int, vary: str = "subtrahend") -> None:
-    if vary not in VARY_SIDES:
-        raise SeriesError("the range must sweep either the minuend or the subtrahend")
+def build_pool(m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> list[ProblemKey]:
+    """Every pair from the two ranges, in reading order."""
+    return [
+        (m, s)
+        for m in range(m1, m2 + 1)
+        for s in range(s1, s2 + 1)
+        if allow_negative or m >= s
+    ]
+
+
+def pool_size_for(m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> int:
+    """Size of the pool without building it — ranges can multiply out to millions."""
+    if allow_negative:
+        return (m2 - m1 + 1) * (s2 - s1 + 1)
+    return sum(max(0, min(s2, m) - s1 + 1) for m in range(m1, m2 + 1))
+
+
+def validate_series(m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False) -> None:
     labels = {
-        "fixed": "the fixed number",
-        "t1": "the range start",
-        "t2": "the range end",
+        "m1": "the lowest start number",
+        "m2": "the highest start number",
+        "s1": "the smallest take-away",
+        "s2": "the largest take-away",
     }
-    for key, value in (("fixed", fixed), ("t1", t1), ("t2", t2)):
+    for key, value in (("m1", m1), ("m2", m2), ("s1", s1), ("s2", s2)):
         if not isinstance(value, int) or isinstance(value, bool):
             raise SeriesError(f"{labels[key]} must be a whole number")
         if not (0 <= value <= MAX_OPERAND):
             raise SeriesError(f"{labels[key]} must be between 0 and {MAX_OPERAND}")
-    if t1 > t2:
-        raise SeriesError("the range start must not be greater than the range end")
-    if (t2 - t1 + 1) > MAX_POOL_SIZE:
-        raise SeriesError(f"that range makes more than {MAX_POOL_SIZE} problems — try a smaller one")
+    if m1 > m2:
+        raise SeriesError("the start numbers must go from low to high")
+    if s1 > s2:
+        raise SeriesError("the take-away numbers must go from low to high")
+
+    size = pool_size_for(m1, m2, s1, s2, allow_negative)
+    if size == 0:
+        raise SeriesError(
+            "every pair there goes below zero — raise the start numbers, "
+            "lower the take-aways, or allow answers below zero"
+        )
+    if size > MAX_POOL_SIZE:
+        raise SeriesError(
+            f"those ranges make {size} problems — keep it to {MAX_POOL_SIZE} or fewer"
+        )
+
+
+def migrate_series(data: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade a hunt saved before both sides could be ranges.
+
+    The old shape pinned one side (``fixed``) and swept ``[t1, t2]`` over the
+    other, naming the swept side in ``vary``.  Negatives were never filtered
+    back then, so the converted hunt keeps ``allow_negative`` on and its pool
+    comes back identical, progress and all.
+    """
+    if "fixed" not in data:
+        return data
+
+    fixed, t1, t2 = int(data["fixed"]), int(data["t1"]), int(data["t2"])
+    varies_minuend = data.get("vary", "subtrahend") == "minuend"
+    m1, m2, s1, s2 = (t1, t2, fixed, fixed) if varies_minuend else (fixed, fixed, t1, t2)
+
+    dropped = ("fixed", "t1", "t2", "vary", "current_v")
+    upgraded = {k: v for k, v in data.items() if k not in dropped}
+    upgraded.update({"m1": m1, "m2": m2, "s1": s1, "s2": s2, "allow_negative": True})
+
+    def pair(v: int) -> ProblemKey:
+        """Where the swept value sat in the old one-sided pool."""
+        return (v, fixed) if varies_minuend else (fixed, v)
+
+    def upgrade_problem(raw: dict[str, Any]) -> dict[str, Any]:
+        m, s = pair(int(raw["v"]))
+        return {**{k: val for k, val in raw.items() if k != "v"}, "m": m, "s": s}
+
+    upgraded["problems"] = [
+        upgrade_problem(raw) for raw in data.get("problems", []) if "v" in raw
+    ]
+    current_v = data.get("current_v")
+    upgraded["current_key"] = None if current_v is None else list(pair(int(current_v)))
+    return upgraded
 
 
 def clamp_timer_seconds(value: Any) -> int:
@@ -617,6 +703,22 @@ def choose_problem(series: Series, rng: random.Random | None = None) -> ProblemS
     if sum(weights) <= 0:
         return rng.choice(candidates)
     return rng.choices(candidates, weights=weights, k=1)[0]
+
+
+def _span(low: int, high: int) -> str:
+    """How one side reads in a label: a single number, or a range."""
+    return str(low) if low == high else f"[{low}…{high}]"
+
+
+def _as_key(raw: Any, problems: dict[ProblemKey, ProblemState]) -> ProblemKey | None:
+    """Read a stored ``current_key``, dropping anything not in the pool."""
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        return None
+    try:
+        key = (int(raw[0]), int(raw[1]))
+    except (TypeError, ValueError):
+        return None
+    return key if key in problems else None
 
 
 def _clamp(value: int, low: int, high: int) -> int:

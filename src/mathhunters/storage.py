@@ -28,7 +28,7 @@ def default_data_dir() -> Path:
 
 
 class Store:
-    """Thread-safe collection of saved series, keyed by ``a-t1-t2``."""
+    """Thread-safe collection of saved series, keyed by their hunt id."""
 
     def __init__(self, data_dir: Path | None = None) -> None:
         self.data_dir = Path(data_dir) if data_dir else default_data_dir()
@@ -55,7 +55,11 @@ class Store:
                     series = Series.from_dict(entry)
                 except (SeriesError, KeyError, TypeError, ValueError):
                     continue
-                self._series[series.id] = series
+                # Two hunts saved under the old one-sided scheme can upgrade to
+                # the same pool (10 − 10 either way round); keep the livelier one.
+                clash = self._series.get(series.id)
+                if clash is None or series.updated_at >= clash.updated_at:
+                    self._series[series.id] = series
 
     def save(self) -> None:
         with self._lock:
@@ -92,12 +96,14 @@ class Store:
         with self._lock:
             return self._series.get(series_id)
 
-    def get_or_create(self, fixed: int, t1: int, t2: int, vary: str = "subtrahend") -> Series:
-        series_id = Series.make_id(fixed, t1, t2, vary)  # type: ignore[arg-type]
+    def get_or_create(
+        self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False
+    ) -> Series:
+        series_id = Series.make_id(m1, m2, s1, s2, allow_negative)
         with self._lock:
             series = self._series.get(series_id)
             if series is None:
-                series = Series.create(fixed, t1, t2, vary)  # type: ignore[arg-type]
+                series = Series.create(m1, m2, s1, s2, allow_negative)
                 self._series[series_id] = series
                 self.save()
             return series

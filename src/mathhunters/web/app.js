@@ -17,7 +17,10 @@
     pack: null, // name of the selected image pack
     history: [],
     series: null,
-    vary: "subtrahend", // which side of the subtraction the range sweeps
+    // Each side of the subtraction is either one number or a range.
+    modes: { m: "one", s: "range" },
+    allowNegative: localStorage.getItem("mdh-negative") === "on",
+    strategyOn: localStorage.getItem("mdh-strategy") !== "off",
     timerEnabled: localStorage.getItem("mdh-timer") === "on",
     timerSeconds: parseInt(localStorage.getItem("mdh-timer-seconds"), 10) || 10,
     askedAt: 0,
@@ -84,6 +87,8 @@
     else if (name === "seal") { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.24, "triangle", 0.14, i * 0.07)); }
     else if (name === "victory") { [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, 0.45, "triangle", 0.16, i * 0.12)); }
     else if (name === "key") { tone(420, 0.04, "square", 0.05); }
+    else if (name === "step") { tone(740, 0.07, "triangle", 0.12); tone(1110, 0.1, "triangle", 0.09, 0.05); }
+    else if (name === "nudge") { tone(260, 0.12, "sawtooth", 0.09); }
   }
 
   /* -------------------------- ambient embers ---------------------------- */
@@ -147,54 +152,105 @@
 
   /* ------------------------------- home --------------------------------- */
 
-  const inputs = { fixed: $("input-fixed"), t1: $("input-t1"), t2: $("input-t2") };
+  const inputs = {
+    m1: $("input-m1"), m2: $("input-m2"),
+    s1: $("input-s1"), s2: $("input-s2"),
+  };
+
+  const num = (el) => {
+    const v = parseInt(el.value, 10);
+    return Number.isFinite(v) ? v : 0;
+  };
+
+  /** The [low, high] one side covers — a side set to one number covers just it. */
+  function sideRange(side) {
+    const from = num(inputs[side + "1"]);
+    return [from, state.modes[side] === "one" ? from : num(inputs[side + "2"])];
+  }
 
   function readForge() {
-    const num = (el) => {
-      const v = parseInt(el.value, 10);
-      return Number.isFinite(v) ? v : 0;
-    };
+    const [m1, m2] = sideRange("m");
+    const [s1, s2] = sideRange("s");
     return {
-      fixed: num(inputs.fixed),
-      t1: num(inputs.t1),
-      t2: num(inputs.t2),
-      vary: state.vary,
+      m1, m2, s1, s2,
+      allow_negative: state.allowNegative,
       timer_enabled: state.timerEnabled,
       timer_seconds: state.timerSeconds,
     };
   }
 
-  function validateForge({ fixed, t1, t2 }) {
+  /** How many problems the ranges make — counted, not built: they multiply out fast. */
+  function poolCount({ m1, m2, s1, s2, allow_negative }) {
+    if (allow_negative) return (m2 - m1 + 1) * (s2 - s1 + 1);
+    let count = 0;
+    for (let m = m1; m <= m2; m++) count += Math.max(0, Math.min(s2, m) - s1 + 1);
+    return count;
+  }
+
+  /** Every pair in the pool, in the order the hunt board shows them. */
+  function poolPairs({ m1, m2, s1, s2, allow_negative }) {
+    const pairs = [];
+    for (let m = m1; m <= m2; m++) {
+      for (let s = s1; s <= s2; s++) {
+        if (allow_negative || m >= s) pairs.push([m, s]);
+      }
+    }
+    return pairs;
+  }
+
+  function validateForge(values) {
+    const { m1, m2, s1, s2 } = values;
     const max = state.rules.max_operand;
-    if ([fixed, t1, t2].some((n) => n < 0 || n > max)) return `Numbers must be between 0 and ${max}.`;
-    if (t1 > t2) return "The range start has to be smaller than the range end.";
-    if (t2 - t1 + 1 > state.rules.max_pool_size) return `That range makes ${t2 - t1 + 1} problems — keep it to ${state.rules.max_pool_size} or fewer.`;
+    if ([m1, m2, s1, s2].some((n) => n < 0 || n > max)) return `Numbers must be between 0 and ${max}.`;
+    if (m1 > m2) return "The start numbers have to go from low to high.";
+    if (s1 > s2) return "The take-away numbers have to go from low to high.";
+    const count = poolCount(values);
+    if (count === 0) {
+      return "Every pair there goes below zero — raise the start numbers, lower the take-aways, or allow answers below zero.";
+    }
+    if (count > state.rules.max_pool_size) {
+      return `Those ranges make ${count} problems — keep it to ${state.rules.max_pool_size} or fewer.`;
+    }
     return null;
   }
 
-  /** The two operands of one problem, given the forge values. */
-  function operands(values, v) {
-    return values.vary === "minuend"
-      ? { minuend: v, subtrahend: values.fixed }
-      : { minuend: values.fixed, subtrahend: v };
+  /** How a side reads in a label: one number, or a span. */
+  const span = (low, high) => (low === high ? String(low) : `[${low}…${high}]`);
+
+  function forgeLabel({ m1, m2, s1, s2 }) {
+    return `${span(m1, m2)} − ${span(s1, s2)}`;
   }
 
-  function seriesLabel(s) {
-    const span = `[${s.t1}…${s.t2}]`;
-    return s.vary === "minuend" ? `${span} − ${s.fixed}` : `${s.fixed} − ${span}`;
-  }
-
-  function setVary(vary) {
-    state.vary = vary;
-    for (const btn of document.querySelectorAll(".mode")) {
-      const on = btn.dataset.vary === vary;
-      btn.classList.toggle("mode--on", on);
+  function setSideMode(side, mode) {
+    state.modes[side] = mode;
+    const box = document.querySelector(`.side[data-side="${side}"]`);
+    box.dataset.mode = mode;
+    for (const btn of box.querySelectorAll(".side__mode")) {
+      const on = btn.dataset.mode === mode;
+      btn.classList.toggle("side__mode--on", on);
       btn.setAttribute("aria-checked", String(on));
     }
-    $("fixed-label").innerHTML = vary === "minuend"
-      ? "Take away <b>B</b> (fixed)"
-      : "Start number <b>A</b> (fixed)";
+    box.querySelector('[data-role="first-label"]').textContent = mode === "one" ? "Number" : "From";
+    // Opening a range on a side that was one number: start the span there.
+    const to = inputs[side + "2"];
+    if (mode === "range" && num(to) < num(inputs[side + "1"])) to.value = num(inputs[side + "1"]);
     renderPreview();
+  }
+
+  function setAllowNegative(on) {
+    state.allowNegative = !!on;
+    $("negative-toggle").checked = state.allowNegative;
+    localStorage.setItem("mdh-negative", state.allowNegative ? "on" : "off");
+    renderPreview();
+  }
+
+  /** Put the forge back into the shape of the hunt that just opened. */
+  function applyForge(s) {
+    inputs.m1.value = s.m1; inputs.m2.value = s.m2;
+    inputs.s1.value = s.s1; inputs.s2.value = s.s2;
+    setSideMode("m", s.m1 === s.m2 ? "one" : "range");
+    setSideMode("s", s.s1 === s.s2 ? "one" : "range");
+    setAllowNegative(s.allow_negative);
   }
 
   function renderPreview() {
@@ -208,6 +264,7 @@
       error.textContent = err;
       error.hidden = false;
       $("preview-count").textContent = "—";
+      $("forge-shape").textContent = "—";
       $("start-btn").disabled = true;
       $("start-btn").style.opacity = ".45";
       return;
@@ -216,16 +273,16 @@
     $("start-btn").disabled = false;
     $("start-btn").style.opacity = "1";
 
-    const count = values.t2 - values.t1 + 1;
-    $("preview-count").textContent = `${count} demon${count === 1 ? "" : "s"} in this hunt`;
-    for (let v = values.t1; v <= values.t2; v++) {
-      const { minuend, subtrahend } = operands(values, v);
+    const pairs = poolPairs(values);
+    $("preview-count").textContent = `${pairs.length} demon${pairs.length === 1 ? "" : "s"} in this hunt`;
+    $("forge-shape").textContent = forgeLabel(values);
+    pairs.forEach(([minuend, subtrahend], i) => {
       const chip = document.createElement("span");
       chip.className = "chip";
       chip.textContent = `${minuend} − ${subtrahend}`;
-      chip.style.animationDelay = `${(v - values.t1) * 18}ms`;
+      chip.style.animationDelay = `${i * 18}ms`;
       chips.appendChild(chip);
-    }
+    });
   }
 
   /* --------------------------- image packs ------------------------------ */
@@ -235,14 +292,19 @@
     return pack ? pack.images : [];
   }
 
+  /** Do two payloads describe the same problem? */
+  function samePair(a, b) {
+    return !!a && !!b && a.minuend === b.minuend && a.subtrahend === b.subtrahend;
+  }
+
   /**
    * Each problem is bound to one picture, by its position in the pool, so
    * `10 − 7` always shows the same image. Packs smaller than the pool repeat.
    */
-  function imageFor(v) {
+  function imageFor(problem) {
     const images = packImages();
     if (!images.length || !state.series) return null;
-    const index = state.series.problems.findIndex((p) => p.v === v);
+    const index = state.series.problems.findIndex((p) => samePair(p, problem));
     return images[(index < 0 ? 0 : index) % images.length];
   }
 
@@ -308,7 +370,7 @@
             <span class="hunt-card__pct">${pct}%</span>
           </div>
           <div>
-            <p class="hunt-card__name">${seriesLabel(s)}</p>
+            <p class="hunt-card__name">${s.label}</p>
             <p class="hunt-card__meta">${s.mastered_count}/${s.pool_size} sealed${s.completions ? ` · cleared ×${s.completions}` : ""}</p>
             <p class="hunt-card__meta">⏱ ${formatDuration(s.elapsed_ms)} · best combo ${s.best_streak}</p>
           </div>
@@ -323,7 +385,7 @@
       const resetBtn = card.querySelector('[data-act="restart"]');
       if (resetBtn) resetBtn.addEventListener("click", () => startSeries(s, true));
       card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-        if (!confirm(`Delete the hunt ${seriesLabel(s)}? Its progress is lost.`)) return;
+        if (!confirm(`Delete the hunt ${s.label}? Its progress is lost.`)) return;
         const data = await api(`/api/series/${s.id}`, { method: "DELETE" });
         state.history = data.series;
         renderHistory();
@@ -338,8 +400,7 @@
     try {
       const data = await api("/api/series", { method: "POST", body: { ...values, restart } });
       state.series = data;
-      inputs.fixed.value = data.fixed; inputs.t1.value = data.t1; inputs.t2.value = data.t2;
-      setVary(data.vary);
+      applyForge(data);
       preloadPack();
       show("screen-play");
       startSessionClock(data);
@@ -355,7 +416,7 @@
 
   function renderPlay() {
     const s = state.series;
-    $("play-label").textContent = seriesLabel(s);
+    $("play-label").textContent = s.label;
 
     const pct = s.points_possible ? (s.points_earned / s.points_possible) * 100 : 0;
     $("seal-fill").style.width = `${pct}%`;
@@ -366,6 +427,7 @@
 
     renderCracks(s);
     renderBoard(s);
+    renderStrategy(s.question);
 
     if (s.question) {
       $("eq-minuend").textContent = s.question.minuend;
@@ -383,7 +445,7 @@
   /** Swap in this problem's picture, or fall back to the drawn demon. */
   function renderPackCard(question) {
     const card = $("pack-card");
-    const url = imageFor(question.v);
+    const url = imageFor(question);
     if (!url) {
       card.hidden = true;
       $("demon").style.display = state.assets.demon ? "none" : "";
@@ -397,6 +459,100 @@
     if (img.src !== new URL(url, location.href).href) img.src = url;
     img.alt = `Picture for ${question.text}`;
     card.classList.toggle("pack-card--sealed", question.points >= state.rules.mastery_target);
+  }
+
+  /* --------------------------- strategy picture ------------------------- */
+
+  // The plan on screen, plus what has been filled into it. Never scored and
+  // never sent to the server — it is scratch paper, not an answer.
+  let strategy = null;
+
+  // Digits land in whichever box was last tapped: the answer, or a step of
+  // the strategy picture.
+  let typingTarget = null;
+
+  function renderStrategy(question) {
+    const panel = $("strategy");
+    const plan = state.strategyOn ? window.MathHunterStrategies.find(question) : null;
+    strategy = plan ? { plan, values: plan.steps.map(() => null) } : null;
+    // The boxes from the last problem are gone, so typing goes back to the answer.
+    typingTarget = $("answer");
+    panel.hidden = !plan;
+    if (!plan) return;
+
+    $("strat-title").textContent = `⟡ ${plan.title} ⟡`;
+    $("strat-caption").textContent = plan.caption;
+    $("strat-steps").innerHTML = plan.steps
+      .map((step, i) => `
+        <label class="step step--${step.tint}">
+          <span class="step__eq">${step.text}</span>
+          <input class="step__input" id="step-${i}" data-index="${i}" type="text" inputmode="none"
+                 maxlength="2" placeholder="?" autocomplete="off"
+                 aria-label="${step.text.replace("−", "minus")}" />
+        </label>`)
+      .join(`<span class="step__join">${plan.join}</span>`);
+
+    for (const input of $("strat-steps").querySelectorAll(".step__input")) {
+      input.addEventListener("focus", () => { typingTarget = input; });
+    }
+    drawStrategy();
+  }
+
+  /** Redraw the picture, and the running sum, from what is filled in so far. */
+  function drawStrategy(total = null) {
+    if (!strategy) return;
+    const { plan, values } = strategy;
+    const done = values.every((v) => v !== null);
+    const sum = $("strat-sum");
+
+    $("strat-picture").innerHTML = plan.picture(values, total);
+    sum.innerHTML = done
+      ? `<b>${values.join(` ${plan.join} `)} = ${total === null ? "?" : total}</b>`
+      : `<small>${plan.prompt}</small>`;
+    // Both parts filled and nothing given away yet: the addition is theirs to do.
+    sum.classList.toggle("strat__sum--ready", done && total === null);
+  }
+
+  /** Check one step. Right: it locks in. Wrong: a nudge, and nothing is scored. */
+  function commitStep(index) {
+    if (!strategy) return;
+    const input = $(`step-${index}`);
+    const step = strategy.plan.steps[index];
+    const value = parseInt(input.value, 10);
+
+    if (value !== step.expected) {
+      input.value = "";
+      const card = input.closest(".step");
+      card.classList.add("shake");
+      setTimeout(() => card.classList.remove("shake"), 450);
+      sfx("nudge");
+      return;
+    }
+
+    lockStep(index, value, "solved");
+    drawStrategy();  // the hop it stands for is now drawn in full
+    sfx("step");
+    const next = strategy.values.findIndex((v) => v === null);
+    if (next >= 0) $(`step-${next}`).focus({ preventScroll: true });
+    else aimAtAnswer();  // both parts done — the sum goes in the answer box
+  }
+
+  function lockStep(index, value, how) {
+    const input = $(`step-${index}`);
+    strategy.values[index] = value;
+    input.value = value;
+    input.readOnly = true;
+    input.closest(".step").classList.add(`step--${how}`);
+  }
+
+  /** Work the whole thing out — after a miss, so the picture teaches. */
+  function revealStrategy() {
+    if (!strategy) return false;
+    strategy.plan.steps.forEach((step, i) => {
+      if (strategy.values[i] === null) lockStep(i, step.expected, "shown");
+    });
+    drawStrategy(strategy.plan.total);
+    return true;
   }
 
   /** Whichever artwork is on screen — the pack picture or the drawn demon. */
@@ -541,10 +697,9 @@
   function renderBoard(s) {
     const board = $("board");
     board.innerHTML = "";
-    const activeV = s.question ? s.question.v : null;
     for (const p of s.problems) {
       const tile = document.createElement("div");
-      tile.className = "tile" + (p.mastered ? " tile--done" : "") + (p.v === activeV ? " tile--active" : "");
+      tile.className = "tile" + (p.mastered ? " tile--done" : "") + (samePair(p, s.question) ? " tile--active" : "");
       const pips = Array.from({ length: state.rules.mastery_target },
         (_, i) => `<span class="tile__pip${i < p.points ? " on" : ""}"></span>`).join("");
       tile.innerHTML = `<div class="tile__eq">${p.text}</div><div class="tile__pips">${pips}</div>`;
@@ -597,8 +752,10 @@
         setTimeout(() => celebrate(data), 700);
       } else {
         // Hold the feedback on screen before moving on; longer for a miss, so
-        // there is time to read the correct answer.
-        const pause = data.result.correct ? 620 : 1500;
+        // there is time to read the correct answer — longer again when there
+        // is a worked-out picture to take in with it.
+        const worked = !data.result.correct && revealStrategy();
+        const pause = data.result.correct ? 620 : worked ? 2600 : 1500;
         setTimeout(() => { renderPlay(); focusAnswer(); state.busy = false; }, pause);
         return;
       }
@@ -649,11 +806,23 @@
     }
   }
 
+  /** Send typing back to the answer box, without disturbing the round. */
+  function aimAtAnswer() {
+    typingTarget = $("answer");
+    typingTarget.focus({ preventScroll: true });
+  }
+
+  /** Start a fresh round on the answer box: empty, and timed from now. */
   function focusAnswer() {
-    const el = $("answer");
-    el.value = "";
-    el.focus({ preventScroll: true });
+    $("answer").value = "";
     state.askedAt = performance.now();
+    aimAtAnswer();
+  }
+
+  /** The step of the picture being typed into, or -1 for the answer box. */
+  function activeStep() {
+    if (!strategy || !typingTarget || !typingTarget.classList.contains("step__input")) return -1;
+    return Number(typingTarget.dataset.index);
   }
 
   /* ---------------------------- effects --------------------------------- */
@@ -740,11 +909,11 @@
     stopClock();
     stopSessionClock();  // the server froze the hunt's time on mastery
     const accuracy = s.total_asked ? Math.round((s.total_correct / s.total_asked) * 100) : 100;
-    $("victory-series").textContent = seriesLabel(s);
+    $("victory-series").textContent = s.label;
 
     // Every picture from this hunt, now sealed.
     const gallery = $("victory-gallery");
-    const used = [...new Set(s.problems.map((p) => imageFor(p.v)).filter(Boolean))];
+    const used = [...new Set(s.problems.map((p) => imageFor(p)).filter(Boolean))];
     gallery.hidden = used.length === 0;
     gallery.innerHTML = used
       .map((url, i) => `<img src="${url}" alt="" style="animation-delay:${i * 60}ms" />`)
@@ -838,10 +1007,28 @@
   /* ------------------------------ wiring -------------------------------- */
 
   function wire() {
-    // Orientation: which side of the subtraction the range sweeps.
-    for (const btn of document.querySelectorAll(".mode")) {
-      btn.addEventListener("click", () => { setVary(btn.dataset.vary); sfx("key"); });
+    // Each side: one number, or a range.
+    for (const box of document.querySelectorAll(".side")) {
+      for (const btn of box.querySelectorAll(".side__mode")) {
+        btn.addEventListener("click", () => { setSideMode(box.dataset.side, btn.dataset.mode); sfx("key"); });
+      }
     }
+
+    // Strategy pictures: on by default, and only ever shown for a problem
+    // some strategy actually covers.
+    const strategyToggle = $("strategy-toggle");
+    strategyToggle.checked = state.strategyOn;
+    strategyToggle.addEventListener("change", () => {
+      state.strategyOn = strategyToggle.checked;
+      localStorage.setItem("mdh-strategy", state.strategyOn ? "on" : "off");
+      if (state.series) renderStrategy(state.series.question);
+      sfx("key");
+    });
+
+    // Problems that would go below zero are left out unless asked for.
+    const negativeToggle = $("negative-toggle");
+    negativeToggle.checked = state.allowNegative;
+    negativeToggle.addEventListener("change", () => { setAllowNegative(negativeToggle.checked); sfx("key"); });
 
     // Countdown option
     const timerToggle = $("timer-toggle");
@@ -922,7 +1109,8 @@
       else if (event.key === "Backspace") { event.preventDefault(); pressKey("del"); }
       else if (event.key === "Enter") { event.preventDefault(); pressKey("enter"); }
       else if (event.key === "-") { event.preventDefault(); pressKey("-"); }
-      else if (event.key === "Escape") returnHome();
+      // Escape backs out of a strategy step first, and only then the hunt.
+      else if (event.key === "Escape") { if (activeStep() >= 0) aimAtAnswer(); else returnHome(); }
     });
 
     // Sound
@@ -936,7 +1124,10 @@
     });
 
     // Tapping the equation returns focus to the answer box.
-    $("answer").addEventListener("focus", () => $("answer").setSelectionRange(99, 99));
+    $("answer").addEventListener("focus", () => {
+      typingTarget = $("answer");
+      $("answer").setSelectionRange(99, 99);
+    });
 
     // Closing or hiding the tab counts as stepping away: stop the hunt's clock
     // rather than letting the server keep counting an empty room.
@@ -949,16 +1140,28 @@
   }
 
   function pressKey(key) {
-    const el = $("answer");
-    if (key === "enter") { submitAnswer(); return; }
+    const step = activeStep();
+    const el = step >= 0 ? typingTarget : $("answer");
+    // Tapping a step that is already filled in just moves typing back.
+    if (el.readOnly) { aimAtAnswer(); pressKey(key); return; }
+
+    if (key === "enter") {
+      if (step >= 0) commitStep(step);
+      else submitAnswer();
+      return;
+    }
     sfx("key");
     if (key === "del") { el.value = el.value.slice(0, -1); return; }
     if (key === "-") {
+      // A step of a strategy is never negative; only the answer can be.
+      if (step >= 0) return;
       el.value = el.value.startsWith("-") ? el.value.slice(1) : "-" + el.value;
       return;
     }
-    if (el.value.replace("-", "").length >= 3) return;
+    if (el.value.replace("-", "").length >= (step >= 0 ? 2 : 3)) return;
     el.value += key;
+    // A step that matches locks itself in, so a right answer needs no extra tap.
+    if (step >= 0 && parseInt(el.value, 10) === strategy.plan.steps[step].expected) commitStep(step);
   }
 
   /* ------------------------------- boot --------------------------------- */
@@ -972,7 +1175,8 @@
       $("forge-error").textContent = `Could not reach the hunt server: ${err.message}`;
       $("forge-error").hidden = false;
     }
-    setVary(state.vary);
+    setSideMode("m", state.modes.m);
+    setSideMode("s", state.modes.s);
   }
 
   boot();

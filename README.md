@@ -29,16 +29,20 @@ see [Picture packs](#picture-packs).
 
 ## How a hunt works
 
-You pick a **fixed number** and a **range**. One side of the subtraction is
-pinned, the other sweeps the range — the two orientations are:
+Each side of the subtraction is either **one number** or **a range**, set
+independently. The pool is every pair the two sides make:
 
-| Mode                | You set                | The pool becomes                |
-| ------------------- | ---------------------- | ------------------------------- |
-| **Same start number** | `A = 10`, range `0–9` | `10−0, 10−1, 10−2, … 10−9`      |
-| **Same take-away**    | `B = 3`, range `5–12` | `5−3, 6−3, 7−3, … 12−3`         |
+| You set                                    | The pool becomes                        |
+| ------------------------------------------ | --------------------------------------- |
+| start `10`, take away `0–9`                 | `10−0, 10−1, 10−2, … 10−9`              |
+| start `5–12`, take away `3`                 | `5−3, 6−3, 7−3, … 12−3`                 |
+| start `10–12`, take away `0–4`              | `10−0 … 10−4, 11−0 … 11−4, 12−0 … 12−4` |
+| start `7`, take away `4`                    | `7−4` on its own                        |
 
-Exactly one side is a range; the other is always a single number. Both
-orientations of the same numbers are tracked as separate hunts.
+Pairs that would go below zero — `3−8` and friends — are left out, unless you
+switch on **allow answers below zero**; that makes a separate hunt with its own
+progress. A pool can hold up to **64** problems, counted after the below-zero
+pairs are dropped; the forge shows the count and the full list before you start.
 
 ### Scoring
 
@@ -51,6 +55,45 @@ orientations of the same numbers are tracked as separate hunts.
 
 Miss a sealed problem and the seal cracks: it drops to 1 and has to be earned
 back. Mastery means all of them are at 3 *at the same time*.
+
+### Strategy pictures
+
+Some problems have a way in — a trick that turns one hard subtraction into two
+easy ones. When a problem has one, the hunt draws it under the equation. This is
+on by default; the **Show the strategy picture** switch at HQ turns it off.
+
+Right now there is one strategy:
+
+**Bridge through 10** — for a teen number take away a single digit (minuend
+`11–20`, subtrahend `1–9`). The jump from one number to the other always crosses
+10, so 10 makes a stop along the way:
+
+```
+20 − 8  =  (10 − 8) + (20 − 10)  =  2 + 10  =  12
+```
+
+On a number line those two smaller problems are simply the two hops that make up
+the distance between the numbers:
+
+```
+        ╭──╮         ╭─────────────╮
+        │ 2│         │      10     │        ← one box to fill in per hop
+   ──●──┴──●─────────┴─────────────●──
+     8    10                      20
+     └──────── the whole jump ─────┘        ← that distance is the answer
+```
+
+Each hop has a box. Fill one in and its arc lights up and draws itself; get one
+wrong and it just shakes — **nothing here is ever scored**, it's scratch paper.
+With both hops filled, add them and type the total as your answer. Skipping the
+picture and answering straight off is always fine; miss the answer and the whole
+bridge is worked out on screen before the next problem.
+
+Adding a strategy means adding one object to
+[`src/mathhunters/web/strategies.js`](src/mathhunters/web/strategies.js): when it
+applies, the smaller problems it breaks into, and how to draw it. The app
+supplies the boxes, the checking, the sum, and the reveal. The first strategy
+that applies to a problem is the one shown.
 
 ### Hunt time
 
@@ -116,16 +159,18 @@ nothing.
 
 ## The screens
 
-**HQ (home)** — forge a new hunt (mode toggle, fixed number, range, live preview
+**HQ (home)** — forge a new hunt (a number or a range on each side, live preview
 of the problem pool, countdown option, picture pack), or pick up a past hunt.
 Each past hunt shows a progress ring, how many demons are sealed, and how many
 times it's been cleared. Mastered hunts get a crown and a **Replay** button.
 
 **The hunt** — the picture (or the drawn demon), the countdown if it's on, the
-problem, three point pips for the current problem, a hunt clock, a combo counter, and the
+problem, the strategy picture when one applies, three point pips for the current
+problem, a hunt clock, a combo counter, and the
 *Hunt Board* at the bottom showing every problem in the pool with its points, so
 a kid can see exactly what's left. Answer with the on-screen keypad or the real
-keyboard (digits, `−`, `Backspace`, `Enter`, `Esc` to quit to HQ).
+keyboard (digits, `−`, `Backspace`, `Enter`, `Esc` to quit to HQ). Tapping a box
+in the strategy picture types there instead; `Esc` steps back out of it.
 
 **Mastered** — confetti, a spinning seal, a gallery of every picture from the
 hunt, and the run's stats. It stays up for as long as you like; **Return to HQ**
@@ -219,7 +264,9 @@ Or as a module: `python3 -m mathhunters` (with `src/` on `PYTHONPATH`).
 **Progress file:** `~/.math-demon-hunters/progress.json` — plain JSON, safe to
 back up, copy between machines, or delete to start fresh. If it ever gets
 corrupted the app renames it to `progress.corrupt.json` and starts clean rather
-than refusing to launch.
+than refusing to launch. Hunts saved by an earlier version — back when one side
+of the subtraction was always a single fixed number — are upgraded on load and
+keep every problem and point they had.
 
 ---
 

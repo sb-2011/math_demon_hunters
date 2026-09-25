@@ -28,7 +28,6 @@ from .engine import (
     TIMER_DEFAULT_SECONDS,
     TIMER_MAX_SECONDS,
     TIMER_MIN_SECONDS,
-    VARY_SIDES,
     WRONG_PENALTY,
     Series,
     SeriesError,
@@ -42,7 +41,7 @@ PROJECT_ROOT = PACKAGE_DIR.parents[1]
 ASSETS_DIR = PROJECT_ROOT / "assets"
 IMAGES_DIR = PROJECT_ROOT / "images"
 
-SERIES_ID_RE = re.compile(r"^[ms]\d{1,3}-\d{1,3}-\d{1,3}$")
+SERIES_ID_RE = re.compile(r"^r\d{1,3}-\d{1,3}x\d{1,3}-\d{1,3}(-neg)?$")
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -258,7 +257,6 @@ class HunterHandler(BaseHTTPRequestHandler):
                 "wrong_penalty": WRONG_PENALTY,
                 "max_operand": MAX_OPERAND,
                 "max_pool_size": MAX_POOL_SIZE,
-                "vary_sides": list(VARY_SIDES),
                 "timer_default_seconds": TIMER_DEFAULT_SECONDS,
                 "timer_min_seconds": TIMER_MIN_SECONDS,
                 "timer_max_seconds": TIMER_MAX_SECONDS,
@@ -266,16 +264,17 @@ class HunterHandler(BaseHTTPRequestHandler):
         }
 
     def _start_series(self, body: dict[str, Any]) -> dict[str, Any]:
-        fixed = _as_int(body.get("fixed"), "the fixed number")
-        t1 = _as_int(body.get("t1"), "the range start")
-        t2 = _as_int(body.get("t2"), "the range end")
-        vary = body.get("vary", "subtrahend")
-        if vary not in VARY_SIDES:
-            raise ApiError("the range must sweep either the minuend or the subtrahend")
+        # Either side may be a range; a side pinned to one number just sends the
+        # same value twice.
+        m1 = _as_int(body.get("m1"), "the lowest start number")
+        m2 = _as_int(body.get("m2"), "the highest start number")
+        s1 = _as_int(body.get("s1"), "the smallest take-away")
+        s2 = _as_int(body.get("s2"), "the largest take-away")
+        allow_negative = bool(body.get("allow_negative"))
         restart = bool(body.get("restart"))
 
         with self.store.lock:
-            series = self.store.get_or_create(fixed, t1, t2, vary)
+            series = self.store.get_or_create(m1, m2, s1, s2, allow_negative)
             # Timer settings are a launch choice, not part of the hunt's identity,
             # so they are re-applied every time the hunt is opened.
             series.timer_enabled = bool(body.get("timer_enabled", series.timer_enabled))
@@ -300,9 +299,9 @@ class HunterHandler(BaseHTTPRequestHandler):
         elapsed_ms = int(elapsed) if isinstance(elapsed, (int, float)) and elapsed >= 0 else None
 
         with self.store.lock:
-            if series.current_v is None:
+            if series.current_key is None:
                 series.next_problem()
-            if series.current_v is None:
+            if series.current_key is None:
                 raise ApiError("this hunt is already complete")
             result = series.answer(value, elapsed_ms=elapsed_ms, timed_out=timed_out)
             if not result["series_mastered"]:
@@ -314,7 +313,7 @@ class HunterHandler(BaseHTTPRequestHandler):
 
     def _series_payload(self, series: Series) -> dict[str, Any]:
         detail = series.detail()
-        problem = series.problems.get(series.current_v) if series.current_v is not None else None
+        problem = series.problems.get(series.current_key) if series.current_key else None
         detail["question"] = series.problem_view(problem) if problem else None
         return detail
 
