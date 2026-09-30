@@ -45,15 +45,22 @@ number for a 10-problem hunt.
 ## Getting images
 
 ```bash
+# An anime's own artwork — cover, banner, and a portrait per character.
+# Searches by title, needs no key at all. --shuffle takes a random handful.
+python3 scripts/fetch_images.py inuyasha -q "Inuyasha" -n 10 --source anime --shuffle
+
 # Google image search (official API — needs a free key, see --help-google)
 python3 scripts/fetch_images.py kpop-demon-hunters -q "Kpop Demon Hunters movie" -n 12
 
-# Openly licensed images, no setup at all
+# Openly licensed images, no setup at all — fan photos and cosplay, not the show
 python3 scripts/fetch_images.py space -q "nebula" -n 10 --source openverse
 
 # URLs you picked yourself (right-click → copy image address)
 python3 scripts/fetch_images.py my-theme --source urls --urls-file picks.txt
 ```
+
+Without `--shuffle` the `anime` source gives you the best-loved characters in
+order, which is usually the main cast; with it you get a different mix each run.
 
 Or just drag image files into a folder here — nothing else is required.
 

@@ -3,7 +3,7 @@
 
     python3 scripts/fetch_images.py kpop-demon-hunters --query "Kpop Demon Hunters" -n 12
 
-Three sources, chosen with ``--source``:
+Four sources, chosen with ``--source``:
 
 ``google`` (default)
     Google's official **Custom Search JSON API** — the supported way to run a
@@ -11,14 +11,24 @@ Three sources, chosen with ``--source``:
     Google's terms and breaks constantly, so this uses the real API instead.
     Needs two free credentials, once (see ``--help-google``).
 
+``anime``
+    AniList's public API — no key, no setup.  Searches by *title* rather than by
+    keyword, and returns that show's own artwork: its cover, its banner, and a
+    portrait of each main character.  The right source for an anime-themed pack,
+    where a picture per character is exactly what the hunt wants.
+
 ``openverse``
     Openverse's CC-licensed image search.  No key, no setup — but it indexes
-    openly-licensed media, so it will not have stills from a specific movie.
+    openly-licensed media, so it will not have stills from a specific movie:
+    searching a show's name there finds fan photos and cosplay, not the show.
 
 ``urls``
     Read image URLs from a text file, one per line.  The fallback that always
     works: right-click → copy image address on the pictures you actually want,
     paste them into a file, done.
+
+``--shuffle`` takes the requested number at random out of everything a search
+turned up, instead of the top results in order — a different pack each run.
 
 Every download writes a ``CREDITS.md`` in the pack folder recording where each
 file came from.  Downloaded images are ignored by git.
@@ -34,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -158,6 +169,74 @@ def search_google(query: str, count: int) -> list[dict]:
     return results[:count]
 
 
+ANILIST_URL = "https://graphql.anilist.co"
+
+# One show, with everything of its own that is worth putting on a card.
+ANILIST_QUERY = """
+query ($search: String) {
+  Media(search: $search, type: ANIME) {
+    title { romaji english }
+    siteUrl
+    coverImage { extraLarge }
+    bannerImage
+    characters(sort: FAVOURITES_DESC, perPage: 25) {
+      nodes { name { full } image { large } siteUrl }
+    }
+  }
+}
+"""
+
+
+def search_anime(query: str, count: int) -> list[dict]:
+    """AniList — a show's own artwork, searched by title.  No credentials.
+
+    Returns the cover, the banner, and a portrait per character, so a pack for
+    a show is its cast rather than whatever a keyword search turned up.
+    """
+    body = json.dumps({"query": ANILIST_QUERY, "variables": {"search": query}}).encode("utf-8")
+    request = urllib.request.Request(
+        ANILIST_URL,
+        data=body,
+        headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise FetchError(f"AniList returned {exc.code}")
+    except urllib.error.URLError as exc:
+        raise FetchError(f"could not reach AniList: {exc.reason}")
+
+    media = (payload.get("data") or {}).get("Media")
+    if not media:
+        raise FetchError(f"AniList has no show called {query!r} — check the title")
+
+    title = media["title"].get("english") or media["title"].get("romaji") or query
+    credit = f"© the rights holders — artwork listed on AniList for {title}"
+    results: list[dict] = []
+
+    for character in (media.get("characters") or {}).get("nodes") or []:
+        url = (character.get("image") or {}).get("large")
+        if url:
+            results.append(
+                {
+                    "url": url,
+                    "title": character["name"]["full"],
+                    "source": character.get("siteUrl") or media.get("siteUrl"),
+                    "license": credit,
+                }
+            )
+
+    for slot, url in (("cover", (media.get("coverImage") or {}).get("extraLarge")),
+                      ("banner", media.get("bannerImage"))):
+        if url:
+            results.append(
+                {"url": url, "title": f"{title} {slot}", "source": media.get("siteUrl"), "license": credit}
+            )
+
+    return results
+
+
 def search_openverse(query: str, count: int) -> list[dict]:
     """Openverse — openly licensed images, no credentials needed."""
     params = urllib.parse.urlencode(
@@ -254,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         epilog=(
             "examples:\n"
             '  python3 scripts/fetch_images.py kpop-demon-hunters -q "Kpop Demon Hunters movie" -n 12\n'
+            '  python3 scripts/fetch_images.py inuyasha -q "Inuyasha" -n 10 --source anime --shuffle\n'
             '  python3 scripts/fetch_images.py space -q "nebula" -n 10 --source openverse\n'
             "  python3 scripts/fetch_images.py my-theme --source urls --urls-file picks.txt\n"
         ),
@@ -263,10 +343,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-n", "--count", type=int, default=12, help="how many images (default: 12)")
     parser.add_argument(
         "--source",
-        choices=("google", "openverse", "urls"),
+        choices=("google", "anime", "openverse", "urls"),
         default="google",
         help="where to search (default: google)",
     )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="take the pictures at random from everything found, not the top ones in order",
+    )
+    parser.add_argument("--seed", type=int, help="make --shuffle repeatable")
     parser.add_argument("--urls-file", type=Path, help="text file of image URLs, for --source urls")
     parser.add_argument("--images-root", type=Path, default=IMAGES_ROOT, help=f"default: {IMAGES_ROOT}")
     parser.add_argument("--help-google", action="store_true", help="show Google API setup instructions")
@@ -286,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
 
     pack_dir = args.images_root / args.pack
     print(f"\n  pack    {pack_dir}")
-    print(f"  source  {args.source}")
+    print(f"  source  {args.source}{' (shuffled)' if args.shuffle else ''}")
     if args.query:
         print(f"  query   {args.query!r}")
     print(flush=True)  # keep this header ahead of anything written to stderr
@@ -294,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.source == "google":
             results = search_google(args.query, args.count)
+        elif args.source == "anime":
+            results = search_anime(args.query, args.count)
         elif args.source == "openverse":
             results = search_openverse(args.query, args.count)
         else:
@@ -305,6 +393,12 @@ def main(argv: list[str] | None = None) -> int:
     if not results:
         print("  no results — try a different query or source\n")
         return 1
+
+    # Sources hand back everything they found; this is where it is cut to size.
+    if args.shuffle:
+        random.Random(args.seed).shuffle(results)
+        print(f"  picked {min(args.count, len(results))} at random out of {len(results)} found\n")
+    results = results[: args.count]
 
     saved = download(results, pack_dir, args.query or args.pack)
     if saved:
