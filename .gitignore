@@ -9,9 +9,12 @@ dist/
 .DS_Store
 
 # Custom UI artwork is personal (and often not redistributable) — the slot
-# documentation is tracked, the files themselves are not.
+# documentation and each game's folder are tracked, the files themselves are not.
 assets/*
 !assets/README.md
+!assets/*/
+assets/*/*
+!assets/*/.gitkeep
 
 # Image packs: keep the structure, the docs and the built-in demo pack.
 # Pictures you download yourself stay untracked.

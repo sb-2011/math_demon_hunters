@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -48,9 +49,20 @@ def make(m1: int = 10, m2: int = 10, s1: int = 0, s2: int = 9, allow_negative: b
     return Series.create(m1, m2, s1, s2, allow_negative)
 
 
-def ask(series: Series, key: tuple[int, int], *, correct: bool = True, elapsed_ms: int | None = 1000) -> dict:
-    """Force a specific problem to be pending, then answer it."""
+def ask(
+    series: Series,
+    key: tuple[int, int],
+    *,
+    correct: bool = True,
+    retry: bool = False,
+    elapsed_ms: int | None = 1000,
+) -> dict:
+    """Force a specific problem to be pending, then answer it.
+
+    ``retry=True`` stages the round as a second go at a problem just missed.
+    """
     series.current_key = key
+    series.retrying = retry
     value = series.expected(key)
     return series.answer(value if correct else value + 7, elapsed_ms=elapsed_ms)
 
@@ -268,7 +280,7 @@ def test_running_out_of_time_scores_like_a_wrong_answer():
     assert result["expected"] == 6, "the correct answer is still reported, to show the kid"
 
 
-def test_a_timeout_breaks_a_seal_and_queues_a_relapse():
+def test_a_timeout_breaks_a_seal_and_holds_the_problem():
     series = make()
     for _ in range(MASTERY_TARGET):
         ask(series, (10, 5))
@@ -276,7 +288,8 @@ def test_a_timeout_breaks_a_seal_and_queues_a_relapse():
     series.current_key = (10, 5)
     result = series.answer(None, timed_out=True)
     assert result["seal_broken"] is True
-    assert series.problems[10, 5].relapse_due is not None
+    assert result["retry"] is True
+    assert series.current_key == (10, 5), "running out of time is answered, not skipped"
     assert series.streak == 0
 
 
@@ -449,25 +462,49 @@ def test_replaying_a_hunt_resets_its_clock(monkeypatch):
 # --- rotation / freshness ----------------------------------------------------
 
 
-def play(series: Series, turns: int, rng: random.Random, miss_every: int = 0) -> list[tuple[int, int]]:
-    """Play ``turns`` rounds, returning the order problems were asked in."""
-    seen = []
+class Round(NamedTuple):
+    """One round of ``play``, with the context needed to judge the pick."""
+
+    key: tuple[int, int]
+    retry: bool  # a second go at a problem just missed
+    unsealed: int  # problems still short of mastery when it was asked
+
+
+def play(series: Series, turns: int, rng: random.Random, miss_every: int = 0) -> list[Round]:
+    """Play ``turns`` rounds, returning what was asked in each one.
+
+    A miss holds the problem for another go, so every missed round is followed
+    by a retry round on the same problem -- answered correctly here, the way a
+    kid fixing it would.
+    """
+    rounds = []
     for i in range(turns):
         problem = series.next_problem(rng=rng)
         if problem is None:  # series mastered
             break
-        seen.append(problem.key)
+        retry = series.retrying
+        unsealed = sum(1 for p in series.problems.values() if not p.mastered)
+        rounds.append(Round(problem.key, retry, unsealed))
         value = series.expected(problem.key)
-        missed = miss_every and (i + 1) % miss_every == 0
+        missed = bool(miss_every) and not retry and (i + 1) % miss_every == 0
         series.answer(value + 7 if missed else value)
-    return seen
+    return rounds
+
+
+def keys(rounds: list[Round]) -> list[tuple[int, int]]:
+    """Just the problems from what ``play`` returned, retries included."""
+    return [r.key for r in rounds]
 
 
 def test_every_problem_is_introduced_before_anything_repeats():
     for seed in range(8):
         series = make(10, 10, 0, 9)
-        seen = play(series, series.pool_size, random.Random(seed), miss_every=3)
-        assert sorted(seen) == [(10, s) for s in range(10)], "the intro sweep must cover the whole pool exactly once"
+        # Retries interleave with the sweep, so play long enough to be sure the
+        # whole pool has been introduced, then look at the fresh picks only.
+        rounds = play(series, series.pool_size * 3, random.Random(seed), miss_every=3)
+        fresh = [r.key for r in rounds if not r.retry]
+        assert sorted(fresh[: series.pool_size]) == [(10, s) for s in range(10)], \
+            "the intro sweep must cover the whole pool exactly once"
 
 
 def test_a_problem_missed_during_the_intro_sweep_is_prioritised_right_after_it():
@@ -479,15 +516,51 @@ def test_a_problem_missed_during_the_intro_sweep_is_prioritised_right_after_it()
         series.answer(series.expected(problem.key) + (7 if problem.key == (10, 7) else 0))
 
     assert series.problems[10, 7].points == 0
-    assert (10, 7) in play(series, 4, rng), "the missed problem should come back immediately after the sweep"
+    assert keys(play(series, 4, rng))[0] == (10, 7), "the missed problem is the very next thing asked"
 
 
 def test_the_same_problem_is_not_asked_twice_in_a_row():
+    """Outside a correction, that is -- a miss is meant to repeat immediately."""
     series = make(10, 10, 0, 9)
     # Miss every third answer so the hunt runs long without reaching mastery.
-    seen = play(series, 120, random.Random(11), miss_every=3)
-    assert len(seen) == 120
-    assert all(a != b for a, b in zip(seen, seen[1:])), "a problem should cool down before repeating"
+    rounds = play(series, 120, random.Random(11), miss_every=3)
+    assert len(rounds) == 120
+    # The last unsealed problem in a hunt has nothing to alternate with, so the
+    # rule only bites while there is something else left to ask.
+    repeats = [
+        first.key
+        for first, second in zip(rounds, rounds[1:])
+        if first.key == second.key and not second.retry and second.unsealed > 1
+    ]
+    assert not repeats, f"a problem should cool down before repeating: {repeats}"
+
+
+def test_a_missed_problem_is_asked_again_until_it_is_right():
+    series = make(10, 10, 0, 9)
+    for _ in range(2):  # two points banked, so a miss has something to lose
+        ask(series, (10, 6))
+    assert series.problems[10, 6].points == 2
+
+    missed = ask(series, (10, 6), correct=False)
+    assert missed["retry"] is True
+    assert series.problems[10, 6].points == 0
+
+    # Wrong again: still the same problem, and the hunt has not moved on.
+    assert series.next_problem(rng=random.Random(0)).key == (10, 6)
+    again = series.answer(series.expected((10, 6)) + 3)
+    assert again["retry"] is True
+    assert series.problems[10, 6].points == 0
+
+    # Right at last: it scores the usual point and the hunt moves on.
+    assert series.next_problem(rng=random.Random(0)).key == (10, 6)
+    fixed = series.answer(series.expected((10, 6)))
+    assert fixed["correct"] is True
+    assert fixed["corrected"] is True
+    assert fixed["retry"] is False
+    assert fixed["delta"] == 1
+    assert series.problems[10, 6].points == 1, "a correction puts the problem back on 1"
+    assert series.current_key is None
+    assert series.retrying is False
 
 
 def test_a_missed_problem_comes_back_within_a_couple_of_turns():
@@ -498,11 +571,12 @@ def test_a_missed_problem_comes_back_within_a_couple_of_turns():
         play(series, 10, rng)  # introduce everything
 
         ask(series, (10, 6), correct=False)
-        missed_turn = series.turn
+        ask(series, (10, 6), retry=True)  # fixed on the second go
+        fixed_turn = series.turn
 
-        seen = play(series, 3, rng)
-        assert (10, 6) in seen, f"seed {seed}: a missed problem must return quickly, saw {seen}"
-        assert series.problems[10, 6].last_seen_turn >= missed_turn
+        seen = keys(play(series, 3, rng))
+        assert (10, 6) in seen, f"seed {seed}: a corrected problem must return quickly, saw {seen}"
+        assert series.problems[10, 6].last_seen_turn >= fixed_turn
 
 
 def test_a_repeatedly_missed_problem_keeps_coming_back():
@@ -512,15 +586,18 @@ def test_a_repeatedly_missed_problem_keeps_coming_back():
 
     for _ in range(3):
         ask(series, (10, 2), correct=False)
-        assert (10, 2) in play(series, 3, rng)
+        ask(series, (10, 2), retry=True)
+        assert (10, 2) in keys(play(series, 3, rng))
 
 
-def test_answering_a_relapsed_problem_correctly_clears_the_queue():
+def test_a_correction_queues_the_problem_to_be_answered_cold():
+    """Fixing it with the answer on screen is not proof it stuck."""
     series = make(10, 10, 0, 9)
     play(series, 10, random.Random(1))
     ask(series, (10, 2), correct=False)
+    ask(series, (10, 2), retry=True)
     assert series.problems[10, 2].relapse_due is not None
-    ask(series, (10, 2))
+    ask(series, (10, 2))  # answered cold this time
     assert series.problems[10, 2].relapse_due is None
 
 

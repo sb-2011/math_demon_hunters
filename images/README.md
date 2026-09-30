@@ -1,10 +1,12 @@
 # Image packs
 
 One folder per theme. Each folder is a **pack** — a movie, show, or anything
-else. Pick one at launch:
+else. Both games share this folder, so any pack can be used with either one.
+Pick one at launch:
 
 ```bash
 python3 play.py --images images/kpop-demon-hunters
+python3 play_multiplication.py --images images/inuyasha
 ```
 
 Sibling packs are offered on the home screen too, so you can switch themes
@@ -16,6 +18,7 @@ images/
 │   ├── 01-rumi.jpg
 │   ├── 02-mira.jpg
 │   └── CREDITS.md
+├── inuyasha/               ← make one like this for the multiplication hunt
 └── example-theme/          ← copy this shape for a new show or topic
 ```
 
@@ -24,14 +27,15 @@ so a `01-`, `02-` prefix controls the order. Up to 200 images per pack.
 
 ## How the pictures are used
 
-Each problem in a pool is bound to one image **by position**, so `10 − 7` always
-shows the same picture for the whole hunt. That stable pairing is deliberate: the
+Each problem in a pool is bound to one image **by position**, so `10 − 7` (or
+`3 × 7`) always shows the same picture for the whole hunt. That stable pairing is deliberate: the
 picture becomes a second retrieval cue alongside the numbers, which is exactly
 what you want for recall practice.
 
 - The picture is the card you face on the play screen, framed in neon.
 - It takes the hit animation on a correct answer and rages on a wrong one.
-- When that problem hits 3 points, a gold **SEALED** stamp slams onto it.
+- When that problem hits 3 points, a gold stamp slams onto it: **SEALED** in the
+  subtraction hunt, **PURE** in the multiplication one.
 - Clearing the whole series shows every picture from the hunt in the
   celebration gallery.
 
@@ -56,6 +60,6 @@ Or just drag image files into a folder here — nothing else is required.
 ## A note on movie stills
 
 Frames from a film belong to the studio. A handful saved locally so your own kid
-can practise subtraction is ordinary personal use; shipping a copy of this app
+can practise their maths is ordinary personal use; shipping a copy of this app
 with them bundled in is not. This folder's contents are gitignored for that
 reason — the structure is tracked, the pictures are not.

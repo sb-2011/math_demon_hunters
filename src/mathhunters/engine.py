@@ -1,9 +1,14 @@
-"""Scoring and problem-rotation logic for Math Demon Hunters.
+"""Scoring and problem-rotation logic, shared by both trainers.
 
-A *series* is a range on each side of the subtraction:
+Two operations are supported -- subtraction (Math Demon Hunters) and
+multiplication (Math Jewel Hunters).  Everything here is the same for both
+except the handful of things gathered in ``Operation`` below: what a pair works
+out to, which pairs belong in the pool, and how a problem reads.
 
-  * minuend range    ``[m1, m2]`` -- the numbers started from
-  * subtrahend range ``[s1, s2]`` -- the numbers taken away
+A *series* is a range on each side of the operation:
+
+  * left range  ``[m1, m2]`` -- the numbers started from, or the group counts
+  * right range ``[s1, s2]`` -- the numbers taken away, or the group sizes
 
 The pool is every pair drawn from the two ranges.  A side pinned to a single
 number is just a range of width one, so the classic shapes still work:
@@ -11,9 +16,12 @@ number is just a range of width one, so the classic shapes still work:
   * ``10…10 − 0…9``  -> 10-0, 10-1, … 10-9   (one start number)
   * ``5…12 − 3…3``   -> 5-3, 6-3, … 12-3     (one take-away)
   * ``10…12 − 0…4``  -> 10-0 … 12-4          (both sides sweep)
+  * ``3…3 × 1…10``   -> 3×1, 3×2, … 3×10     (the three times table)
 
-Pairs that would go below zero are dropped unless ``allow_negative`` is set,
-so a wide pool stays inside what a kid has actually been taught.
+Pairs that would go below zero are dropped from a subtraction pool unless
+``allow_negative`` is set, so a wide pool stays inside what a kid has actually
+been taught.  Multiplication keeps every pair -- none of them go anywhere
+awkward -- but the ranges may not reach past what the answer pad can hold.
 
 Each problem carries a point score in ``[0, MASTERY_TARGET]``:
 
@@ -21,6 +29,11 @@ Each problem carries a point score in ``[0, MASTERY_TARGET]``:
   * wrong answer   -> ``-2`` (never below zero)
 
 The series is mastered once every problem sits at ``MASTERY_TARGET``.
+
+A missed problem is not swapped out: it stays up and is asked again until it is
+answered correctly, so a round always ends on the right answer and the problem
+starts climbing back immediately.  Once corrected it is still queued to come
+round again shortly, so the fix has to hold on its own.
 
 The scheduler deliberately keeps problems in rotation rather than drilling one
 until it sticks and then dropping it forever.  Every problem is introduced once
@@ -99,10 +112,126 @@ MAX_POOL_SIZE = 64
 ProblemKey = tuple[int, int]
 
 MINUS = "−"  # typographic minus, so "10 − 4" lines up nicely
+TIMES = "×"  # multiplication sign, never a lowercase x
 
 
 class SeriesError(ValueError):
     """Raised when a requested series is out of bounds."""
+
+
+# --- Operations --------------------------------------------------------------
+
+SUB = "sub"
+MUL = "mul"
+
+
+@dataclass(frozen=True)
+class Operation:
+    """Everything that differs between the two trainers.
+
+    ``id`` is what a saved hunt records, ``id_prefix`` opens its hunt id so the
+    two trainers can never read each other's saves by accident, and ``labels``
+    supply the wording for complaints about the forge.
+    """
+
+    id: str
+    glyph: str
+    id_prefix: str
+    labels: dict[str, str]
+    order_errors: tuple[str, str]  # "low to high" complaints, m side then s side
+    supports_negative: bool = False
+
+    def expected(self, m: int, s: int) -> int:
+        raise NotImplementedError
+
+    def in_pool(self, m: int, s: int, allow_negative: bool) -> bool:
+        """Is this pair one a kid should be asked?"""
+        return True
+
+    def pool_size(self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> int:
+        """Size of the pool without building it -- ranges multiply out fast."""
+        return (m2 - m1 + 1) * (s2 - s1 + 1)
+
+    def check_ranges(self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> None:
+        """Raise ``SeriesError`` for limits that are this operation's own."""
+
+
+class _Subtraction(Operation):
+    def expected(self, m: int, s: int) -> int:
+        return m - s
+
+    def in_pool(self, m: int, s: int, allow_negative: bool) -> bool:
+        return allow_negative or m >= s
+
+    def pool_size(self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> int:
+        if allow_negative:
+            return super().pool_size(m1, m2, s1, s2, allow_negative)
+        return sum(max(0, min(s2, m) - s1 + 1) for m in range(m1, m2 + 1))
+
+    def check_ranges(self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> None:
+        if self.pool_size(m1, m2, s1, s2, allow_negative) == 0:
+            raise SeriesError(
+                "every pair there goes below zero — raise the start numbers, "
+                "lower the take-aways, or allow answers below zero"
+            )
+
+
+class _Multiplication(Operation):
+    def expected(self, m: int, s: int) -> int:
+        return m * s
+
+    def check_ranges(self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> None:
+        # The answer pad holds three digits, so a hunt whose biggest product runs
+        # past that would contain problems that literally cannot be answered.
+        biggest = m2 * s2
+        if biggest > MAX_OPERAND:
+            raise SeriesError(
+                f"{m2} {self.glyph} {s2} is {biggest}, past the {MAX_OPERAND} the answer "
+                "pad holds — lower the ranges"
+            )
+
+
+SUBTRACTION = _Subtraction(
+    id=SUB,
+    glyph=MINUS,
+    id_prefix="r",
+    labels={
+        "m1": "the lowest start number",
+        "m2": "the highest start number",
+        "s1": "the smallest take-away",
+        "s2": "the largest take-away",
+    },
+    order_errors=(
+        "the start numbers must go from low to high",
+        "the take-away numbers must go from low to high",
+    ),
+    supports_negative=True,
+)
+
+MULTIPLICATION = _Multiplication(
+    id=MUL,
+    glyph=TIMES,
+    id_prefix="m",
+    labels={
+        "m1": "the smallest number of groups",
+        "m2": "the largest number of groups",
+        "s1": "the smallest group size",
+        "s2": "the largest group size",
+    },
+    order_errors=(
+        "the number of groups must go from low to high",
+        "the group sizes must go from low to high",
+    ),
+)
+
+OPERATIONS: dict[str, Operation] = {SUB: SUBTRACTION, MUL: MULTIPLICATION}
+
+
+def operation(op: str | Operation = SUB) -> Operation:
+    """The operation named ``op``; unknown names fall back to subtraction."""
+    if isinstance(op, Operation):
+        return op
+    return OPERATIONS.get(op, SUBTRACTION)
 
 
 @dataclass
@@ -121,6 +250,9 @@ class ProblemState:
     relapse_due: int | None = None
     fastest_ms: int | None = None
     last_ms: int | None = None
+    # Which operation this pair is read under.  The series it belongs to sets it;
+    # it is not saved, since the series already records the operation.
+    rules: Operation = field(default=SUBTRACTION, repr=False, compare=False)
 
     @property
     def key(self) -> ProblemKey:
@@ -128,11 +260,11 @@ class ProblemState:
 
     @property
     def expected(self) -> int:
-        return self.m - self.s
+        return self.rules.expected(self.m, self.s)
 
     @property
     def text(self) -> str:
-        return f"{self.m} {MINUS} {self.s}"
+        return f"{self.m} {self.rules.glyph} {self.s}"
 
     @property
     def mastered(self) -> bool:
@@ -174,19 +306,23 @@ class ProblemState:
 
 @dataclass
 class Series:
-    """One practice pool: a range of minuends against a range of subtrahends."""
+    """One practice pool: a range on the left against a range on the right."""
 
     m1: int
     m2: int
     s1: int
     s2: int
     allow_negative: bool = False
+    op: str = SUB  # which operation this hunt practises
     problems: dict[ProblemKey, ProblemState] = field(default_factory=dict)
     timer_enabled: bool = False
     timer_seconds: int = TIMER_DEFAULT_SECONDS
     turn: int = 0
     last_review_turn: int = -999
     current_key: ProblemKey | None = None
+    # True while the pending problem is a re-ask after a miss: it stays up until
+    # it is answered correctly.
+    retrying: bool = False
     # Session clock: accumulated play time, plus the start of the stretch
     # currently in progress.  ``running_since`` is deliberately never saved --
     # a hunt cannot be running while the app is closed.
@@ -204,45 +340,69 @@ class Series:
     # -- identity -------------------------------------------------------------
 
     @staticmethod
-    def make_id(m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False) -> str:
+    def make_id(
+        m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False, op: str = SUB
+    ) -> str:
         # Allowing negatives changes which pairs are in the pool, so it belongs
         # in the identity; the countdown, which changes nothing about the pool,
-        # does not.
-        return f"r{m1}-{m2}x{s1}-{s2}" + ("-neg" if allow_negative else "")
+        # does not.  The leading letter is the operation's, so a subtraction hunt
+        # and a multiplication hunt over the same ranges never collide.
+        return (
+            f"{operation(op).id_prefix}{m1}-{m2}x{s1}-{s2}"
+            + ("-neg" if allow_negative else "")
+        )
+
+    @property
+    def operation(self) -> Operation:
+        return operation(self.op)
 
     @property
     def id(self) -> str:
-        return self.make_id(self.m1, self.m2, self.s1, self.s2, self.allow_negative)
+        return self.make_id(self.m1, self.m2, self.s1, self.s2, self.allow_negative, self.op)
 
     @property
     def label(self) -> str:
-        return f"{_span(self.m1, self.m2)} {MINUS} {_span(self.s1, self.s2)}"
+        return f"{_span(self.m1, self.m2)} {self.operation.glyph} {_span(self.s1, self.s2)}"
 
     @classmethod
     def create(
-        cls, m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False
+        cls,
+        m1: int,
+        m2: int,
+        s1: int,
+        s2: int,
+        allow_negative: bool = False,
+        op: str = SUB,
     ) -> "Series":
-        validate_series(m1, m2, s1, s2, allow_negative)
-        series = cls(m1=m1, m2=m2, s1=s1, s2=s2, allow_negative=allow_negative)
-        series.problems = {key: ProblemState(m=key[0], s=key[1]) for key in series.pool_keys()}
+        rules = operation(op)
+        allow_negative = allow_negative and rules.supports_negative
+        validate_series(m1, m2, s1, s2, allow_negative, op=rules)
+        series = cls(
+            m1=m1, m2=m2, s1=s1, s2=s2, allow_negative=allow_negative, op=rules.id
+        )
+        series.problems = {
+            key: ProblemState(m=key[0], s=key[1], rules=rules) for key in series.pool_keys()
+        }
         return series
 
     # -- problem shape --------------------------------------------------------
 
     def pool_keys(self) -> list[ProblemKey]:
-        """Every ``(minuend, subtrahend)`` pair this series practises."""
-        return build_pool(self.m1, self.m2, self.s1, self.s2, self.allow_negative)
+        """Every pair this series practises, in reading order."""
+        return build_pool(self.m1, self.m2, self.s1, self.s2, self.allow_negative, op=self.op)
 
     def expected(self, key: ProblemKey) -> int:
-        return key[0] - key[1]
+        return self.operation.expected(*key)
 
     def text(self, key: ProblemKey) -> str:
-        return f"{key[0]} {MINUS} {key[1]}"
+        return f"{key[0]} {self.operation.glyph} {key[1]}"
 
     def problem_view(self, problem: ProblemState) -> dict[str, Any]:
+        # "left" and "right" rather than minuend/subtrahend: the same view feeds
+        # both trainers, and one of them is not subtracting anything.
         return {
-            "minuend": problem.m,
-            "subtrahend": problem.s,
+            "left": problem.m,
+            "right": problem.s,
             "text": problem.text,
             "points": problem.points,
             "asked": problem.asked,
@@ -319,6 +479,7 @@ class Series:
         self.turn = 0
         self.last_review_turn = -999
         self.current_key = None
+        self.retrying = False
         self.streak = 0
         # A replay is a fresh attempt, so its clock starts from zero.
         self.elapsed_ms = 0
@@ -336,6 +497,7 @@ class Series:
             return self.problems[self.current_key]
         chosen = choose_problem(self, rng=rng)
         self.current_key = chosen.key if chosen else None
+        self.retrying = False
         return chosen
 
     def answer(
@@ -348,6 +510,9 @@ class Series:
 
         A ``timed_out`` round scores exactly like a wrong answer -- the clock
         running out is the same signal as not knowing it yet.
+
+        A miss leaves the same problem pending, so the next round is another go
+        at it; the series only moves on once it is answered correctly.
         """
         if self.current_key is None or self.current_key not in self.problems:
             raise SeriesError("no problem is currently pending")
@@ -357,6 +522,7 @@ class Series:
         problem = self.problems[self.current_key]
         expected = problem.expected
         correct = (not timed_out) and value == expected
+        was_retry = self.retrying
         was_mastered = problem.mastered
         before = problem.points
         slow = bool(correct and elapsed_ms is not None and elapsed_ms > SLOW_ANSWER_MS)
@@ -376,22 +542,27 @@ class Series:
             if elapsed_ms is not None:
                 if problem.fastest_ms is None or elapsed_ms < problem.fastest_ms:
                     problem.fastest_ms = elapsed_ms
-            problem.relapse_due = None
+            # A correction is not proof it stuck -- the right answer was on
+            # screen a moment ago -- so the problem still comes back shortly to
+            # be answered cold.
+            problem.relapse_due = self.turn + LAPSE_GAP if was_retry else None
             if slow:
                 problem.heat = min(problem.heat + HEAT_ON_SLOW, HEAT_MAX)
         else:
             problem.wrong += 1
             problem.points = max(problem.points - WRONG_PENALTY, MIN_POINTS)
             problem.heat = min(problem.heat + HEAT_ON_MISS, HEAT_MAX)
-            # Come back to this one shortly, while the correction is still fresh.
-            problem.relapse_due = self.turn + LAPSE_GAP
+            problem.relapse_due = None
             self.streak = 0
 
         problem.cooldown_until = self.turn + self._gap_for(correct, problem, slow)
         if was_mastered:
             self.last_review_turn = self.turn
         self.turn += 1
-        self.current_key = None
+        # Hold a missed problem in place: the next round is another attempt at
+        # it, not a new problem.
+        self.retrying = not correct
+        self.current_key = self.current_key if self.retrying else None
         self.updated_at = time.time()
 
         series_mastered = self.is_mastered
@@ -409,8 +580,8 @@ class Series:
             "expected": expected,
             "given": None if timed_out else value,
             "timed_out": timed_out,
-            "minuend": problem.m,
-            "subtrahend": problem.s,
+            "left": problem.m,
+            "right": problem.s,
             "text": problem.text,
             "delta": problem.points - before,
             "points": problem.points,
@@ -419,12 +590,18 @@ class Series:
             "problem_mastered": problem.mastered and not was_mastered,
             "series_mastered": series_mastered,
             "streak": self.streak,
+            # The same problem is coming back for another try.
+            "retry": self.retrying,
+            # This answer was the fix for a problem just missed.
+            "corrected": correct and was_retry,
         }
 
     def _gap_for(self, correct: bool, problem: ProblemState, slow: bool) -> int:
         """How many turns before this problem may be asked again."""
         cap = max(0, self.pool_size - 1)
         if not correct:
+            # A miss holds the problem in place for another try, so this is only
+            # a fallback for the pending problem being lost (a hand-edited save).
             return min(LAPSE_GAP, cap)
         # Spacing widens as a problem approaches mastery, so late practice is
         # spread out rather than crammed -- unless the answer came in slowly.
@@ -442,6 +619,7 @@ class Series:
             "s1": self.s1,
             "s2": self.s2,
             "allow_negative": self.allow_negative,
+            "op": self.op,
             "timer_enabled": self.timer_enabled,
             "timer_seconds": self.timer_seconds,
             "problems": [p.to_dict() for p in self.ordered_problems()],
@@ -451,6 +629,7 @@ class Series:
             # first, so a hunt always loads paused.
             "elapsed_ms": self.elapsed_ms_now(),
             "current_key": list(self.current_key) if self.current_key else None,
+            "retrying": self.retrying,
             "streak": self.streak,
             "best_streak": self.best_streak,
             "total_asked": self.total_asked,
@@ -466,14 +645,17 @@ class Series:
         data = migrate_series(data)
         m1, m2 = int(data["m1"]), int(data["m2"])
         s1, s2 = int(data["s1"]), int(data["s2"])
-        allow_negative = bool(data.get("allow_negative", False))
-        validate_series(m1, m2, s1, s2, allow_negative)
+        # A hunt saved before there was a second trainer is a subtraction hunt.
+        rules = operation(str(data.get("op", SUB)))
+        allow_negative = bool(data.get("allow_negative", False)) and rules.supports_negative
+        validate_series(m1, m2, s1, s2, allow_negative, op=rules)
         series = cls(
             m1=m1,
             m2=m2,
             s1=s1,
             s2=s2,
             allow_negative=allow_negative,
+            op=rules.id,
             timer_enabled=bool(data.get("timer_enabled", False)),
             timer_seconds=clamp_timer_seconds(data.get("timer_seconds", TIMER_DEFAULT_SECONDS)),
             turn=int(data.get("turn", 0)),
@@ -494,9 +676,13 @@ class Series:
             stored[problem.key] = problem
         # Rebuild from the ranges so a hand-edited file can never desync the pool.
         series.problems = {
-            key: stored.get(key, ProblemState(m=key[0], s=key[1])) for key in series.pool_keys()
+            key: stored.get(key, ProblemState(m=key[0], s=key[1], rules=rules))
+            for key in series.pool_keys()
         }
+        for problem in series.problems.values():
+            problem.rules = rules
         series.current_key = _as_key(data.get("current_key"), series.problems)
+        series.retrying = bool(data.get("retrying", False)) and series.current_key is not None
         return series
 
     def ordered_problems(self) -> list[ProblemState]:
@@ -511,6 +697,7 @@ class Series:
             "s1": self.s1,
             "s2": self.s2,
             "allow_negative": self.allow_negative,
+            "op": self.op,
             "label": self.label,
             "timer_enabled": self.timer_enabled,
             "timer_seconds": self.timer_seconds,
@@ -535,49 +722,53 @@ class Series:
         data["problems"] = [self.problem_view(p) for p in self.ordered_problems()]
         data["streak"] = self.streak
         data["turn"] = self.turn
+        data["retrying"] = self.retrying
         return data
 
 
-def build_pool(m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> list[ProblemKey]:
-    """Every pair from the two ranges, in reading order."""
+def build_pool(
+    m1: int, m2: int, s1: int, s2: int, allow_negative: bool, op: str | Operation = SUB
+) -> list[ProblemKey]:
+    """Every pair from the two ranges this operation keeps, in reading order."""
+    rules = operation(op)
     return [
         (m, s)
         for m in range(m1, m2 + 1)
         for s in range(s1, s2 + 1)
-        if allow_negative or m >= s
+        if rules.in_pool(m, s, allow_negative)
     ]
 
 
-def pool_size_for(m1: int, m2: int, s1: int, s2: int, allow_negative: bool) -> int:
+def pool_size_for(
+    m1: int, m2: int, s1: int, s2: int, allow_negative: bool, op: str | Operation = SUB
+) -> int:
     """Size of the pool without building it — ranges can multiply out to millions."""
-    if allow_negative:
-        return (m2 - m1 + 1) * (s2 - s1 + 1)
-    return sum(max(0, min(s2, m) - s1 + 1) for m in range(m1, m2 + 1))
+    return operation(op).pool_size(m1, m2, s1, s2, allow_negative)
 
 
-def validate_series(m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False) -> None:
-    labels = {
-        "m1": "the lowest start number",
-        "m2": "the highest start number",
-        "s1": "the smallest take-away",
-        "s2": "the largest take-away",
-    }
+def validate_series(
+    m1: int,
+    m2: int,
+    s1: int,
+    s2: int,
+    allow_negative: bool = False,
+    op: str | Operation = SUB,
+) -> None:
+    rules = operation(op)
     for key, value in (("m1", m1), ("m2", m2), ("s1", s1), ("s2", s2)):
         if not isinstance(value, int) or isinstance(value, bool):
-            raise SeriesError(f"{labels[key]} must be a whole number")
+            raise SeriesError(f"{rules.labels[key]} must be a whole number")
         if not (0 <= value <= MAX_OPERAND):
-            raise SeriesError(f"{labels[key]} must be between 0 and {MAX_OPERAND}")
+            raise SeriesError(f"{rules.labels[key]} must be between 0 and {MAX_OPERAND}")
     if m1 > m2:
-        raise SeriesError("the start numbers must go from low to high")
+        raise SeriesError(rules.order_errors[0])
     if s1 > s2:
-        raise SeriesError("the take-away numbers must go from low to high")
+        raise SeriesError(rules.order_errors[1])
 
-    size = pool_size_for(m1, m2, s1, s2, allow_negative)
-    if size == 0:
-        raise SeriesError(
-            "every pair there goes below zero — raise the start numbers, "
-            "lower the take-aways, or allow answers below zero"
-        )
+    # Whatever else this operation will not stand for: an empty subtraction pool,
+    # a multiplication whose answers run off the pad.
+    rules.check_ranges(m1, m2, s1, s2, allow_negative)
+    size = rules.pool_size(m1, m2, s1, s2, allow_negative)
     if size > MAX_POOL_SIZE:
         raise SeriesError(
             f"those ranges make {size} problems — keep it to {MAX_POOL_SIZE} or fewer"

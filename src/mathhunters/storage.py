@@ -3,6 +3,11 @@
 Everything lives in one small file so a parent can back it up, inspect it, or
 delete it without touching the app.  Writes go through a temp file + rename so
 an interrupted save can never leave a half-written profile behind.
+
+Each trainer keeps its own store: a different folder by default, and a different
+file name inside it, so pointing both games at one data dir with ``--data-dir``
+still cannot have one overwrite the other's hunts.  A store also ignores saved
+hunts belonging to another operation, whatever file they turn up in.
 """
 
 from __future__ import annotations
@@ -14,25 +19,36 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from . import games as games_mod
 from .engine import Series, SeriesError
 
 SCHEMA_VERSION = 1
 ENV_DATA_DIR = "MATH_HUNTERS_DATA_DIR"
 
 
-def default_data_dir() -> Path:
+def default_data_dir(game: games_mod.Game | str | None = None) -> Path:
+    """Where this game saves when nothing else is asked for.
+
+    The environment override is per-game too: it names the folder the trainers
+    save under, each still in its own subfolder.
+    """
+    resolved = games_mod.get(game)
     override = os.environ.get(ENV_DATA_DIR)
     if override:
-        return Path(override).expanduser()
-    return Path.home() / ".math-demon-hunters"
+        root = Path(override).expanduser()
+        return root if resolved.id == games_mod.DEFAULT_GAME else root / resolved.id
+    return resolved.default_data_dir
 
 
 class Store:
-    """Thread-safe collection of saved series, keyed by their hunt id."""
+    """Thread-safe collection of one game's saved series, keyed by hunt id."""
 
-    def __init__(self, data_dir: Path | None = None) -> None:
-        self.data_dir = Path(data_dir) if data_dir else default_data_dir()
-        self.path = self.data_dir / "progress.json"
+    def __init__(
+        self, data_dir: Path | None = None, game: games_mod.Game | str | None = None
+    ) -> None:
+        self.game = games_mod.get(game)
+        self.data_dir = Path(data_dir) if data_dir else default_data_dir(self.game)
+        self.path = self.data_dir / self.game.progress_file
         self._lock = threading.RLock()
         self._series: dict[str, Series] = {}
         self.load()
@@ -55,6 +71,8 @@ class Store:
                     series = Series.from_dict(entry)
                 except (SeriesError, KeyError, TypeError, ValueError):
                     continue
+                if series.op != self.game.op:
+                    continue  # another trainer's hunt; not this one's business
                 # Two hunts saved under the old one-sided scheme can upgrade to
                 # the same pool (10 − 10 either way round); keep the livelier one.
                 clash = self._series.get(series.id)
@@ -99,11 +117,12 @@ class Store:
     def get_or_create(
         self, m1: int, m2: int, s1: int, s2: int, allow_negative: bool = False
     ) -> Series:
-        series_id = Series.make_id(m1, m2, s1, s2, allow_negative)
+        op = self.game.op
+        series_id = Series.make_id(m1, m2, s1, s2, allow_negative, op=op)
         with self._lock:
             series = self._series.get(series_id)
             if series is None:
-                series = Series.create(m1, m2, s1, s2, allow_negative)
+                series = Series.create(m1, m2, s1, s2, allow_negative, op=op)
                 self._series[series_id] = series
                 self.save()
             return series

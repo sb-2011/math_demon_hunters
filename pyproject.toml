@@ -1,11 +1,12 @@
 [project]
 name = "math-demon-hunters"
-version = "1.1.0"
-description = "A subtraction practice game for kids with a neon demon-hunter theme."
+version = "1.2.0"
+description = "Two math practice games for kids: neon-themed subtraction, and Inuyasha-themed multiplication."
 requires-python = ">=3.10"
 
 # No runtime dependencies on purpose: the app is built on the standard library
-# so a fresh clone runs with `python3 play.py` and nothing else.
+# so a fresh clone runs with `python3 play.py` (or `play_multiplication.py`) and
+# nothing else.
 dependencies = []
 
 [project.optional-dependencies]
@@ -22,7 +23,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mathhunters = ["web/*"]
+mathhunters = ["web/*", "web/*/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

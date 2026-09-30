@@ -1,0 +1,111 @@
+/* =========================================================================
+   Math Jewel Hunters — the Sengoku-night skin.
+
+   Loaded after theme.css, which holds the layout both trainers share.  This
+   file is the palette — forest night, shrine crimson, spirit jade, and the
+   pink of a Shikon shard — plus the one picture only this trainer draws: piles
+   of jewel shards for the equal-groups strategy.
+
+   All artwork is drawn in CSS/SVG; nothing is loaded from the network.
+   ========================================================================= */
+
+:root {
+  --void: #060f0e;
+  --indigo: #0e2321;
+  --violet: #9a52d6; /* the jewel's inner light */
+  --magenta: #ff456f; /* shrine crimson, Inuyasha's robe */
+  --cyan: #56dfb4; /* youkai spirit-jade */
+  --gold: #ffcf6b; /* lantern gold */
+  --bone: #f7f2e2; /* rice paper */
+  --muted: #9dbdad; /* moss */
+
+  --glass: rgba(12, 38, 34, 0.6);
+  --glass-line: rgba(247, 242, 226, 0.14);
+
+  --display: "Avenir Next Condensed", "Futura", "Oswald", Impact, sans-serif;
+  --body: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  --ring-cyan: 0 0 12px rgba(86, 223, 180, 0.75), 0 0 34px rgba(86, 223, 180, 0.35);
+  --ring-magenta: 0 0 12px rgba(255, 69, 111, 0.8), 0 0 40px rgba(255, 69, 111, 0.35);
+  --ring-gold: 0 0 14px rgba(255, 207, 107, 0.85), 0 0 46px rgba(255, 207, 107, 0.4);
+
+  /* The shared layout paints with these. */
+  --sky-deep: linear-gradient(170deg, #12302a 0%, #0a1f1c 45%, #060f0e 100%);
+  --ink: #0a2018; /* text on a gold button */
+  --aura: rgba(154, 82, 214, 0.26); /* the jewel's glow inside panels */
+  --aura-faint: rgba(154, 82, 214, 0.16);
+  --aura-strong: rgba(255, 69, 111, 0.7);
+  --pane-deep: rgba(6, 16, 15, 0.72);
+  --pane-mid: rgba(6, 16, 15, 0.62);
+  --pane-soft: linear-gradient(180deg, rgba(14, 42, 37, 0.76), rgba(6, 16, 15, 0.66));
+  --card-sheen: linear-gradient(160deg, rgba(154, 82, 214, 0.28), transparent 45%, rgba(255, 69, 111, 0.3));
+  --foe-shadow: rgba(255, 69, 111, 0.35);
+}
+
+/* ---- ambient: a forest night under a spirit barrier ---- */
+
+.sky__wash {
+  background:
+    radial-gradient(60% 45% at 18% 12%, rgba(154, 82, 214, 0.36), transparent 60%),
+    radial-gradient(55% 40% at 82% 22%, rgba(255, 69, 111, 0.3), transparent 62%),
+    radial-gradient(70% 55% at 50% 96%, rgba(86, 223, 180, 0.2), transparent 65%),
+    var(--sky-deep);
+}
+
+/* Paper charms — ofuda, ink side up — drift past instead of talismans. */
+.talisman {
+  background: linear-gradient(170deg, #fffaf0, #f2e8cf 55%, #d9c9a4);
+  box-shadow: 0 0 12px rgba(255, 250, 240, 0.5), 0 0 26px rgba(255, 69, 111, 0.35);
+  border-radius: 1px;
+}
+.talisman::after {
+  content: "";
+  position: absolute; inset: 22% 32%;
+  border-top: 2px solid rgba(190, 30, 60, 0.85);
+  border-bottom: 2px solid rgba(190, 30, 60, 0.85);
+}
+
+/* ---- piles of jewel shards ---- */
+
+.strat__picture .grp { max-width: 520px; margin: 0 auto; }
+
+.grp { display: block; width: 100%; height: auto; }
+
+/* The ground each pile sits on: dim until the pile has been counted. */
+.grp__pen {
+  fill: rgba(255, 255, 255, .04);
+  stroke: rgba(255, 255, 255, .16);
+  stroke-width: 2;
+  stroke-dasharray: 7 7;
+}
+.grp__pile--cyan { --pile: var(--cyan); }
+.grp__pile--magenta { --pile: var(--magenta); }
+.grp__pile--gold { --pile: var(--gold); }
+.grp__pile--violet { --pile: var(--violet); }
+.grp__pile--bone { --pile: var(--bone); }
+
+.grp__shard-body { fill: var(--pile); opacity: .62; stroke: rgba(255, 255, 255, .5); stroke-width: 1; }
+.grp__shard-shine { fill: none; stroke: rgba(255, 255, 255, .75); stroke-width: 1.4; stroke-linecap: round; }
+
+/* Counted: the pile lights up and the shards go solid. */
+.grp__pile.is-done .grp__pen {
+  stroke: var(--pile);
+  stroke-dasharray: none;
+  fill: rgba(255, 255, 255, .06);
+}
+.grp__pile.is-done .grp__shard-body { opacity: 1; filter: drop-shadow(0 0 6px var(--pile)); }
+.grp__pile:not(.is-done) .grp__chip { opacity: .72; }
+
+.grp__chip--cyan { --pile: var(--cyan); }
+.grp__chip--magenta { --pile: var(--magenta); }
+.grp__chip--gold { --pile: var(--gold); }
+.grp__chip--violet { --pile: var(--violet); }
+.grp__chip--bone { --pile: var(--bone); }
+.grp__chip rect { fill: rgba(6, 16, 15, .94); stroke: var(--pile); stroke-width: 3; }
+.grp__chip text { font-family: var(--display); font-size: 28px; fill: var(--pile); }
+
+/* The bracket under everything: all the piles together. */
+.grp__span { fill: none; stroke: rgba(255, 207, 107, .4); stroke-width: 2.5; stroke-dasharray: 6 7; }
+.grp__whole.is-done .grp__span { stroke: var(--gold); stroke-dasharray: none; }
+.grp__whole:not(.is-done) .grp__chip { opacity: .5; }
+.grp__caption { font-family: var(--body); font-size: 15px; letter-spacing: 2px; fill: var(--muted); }

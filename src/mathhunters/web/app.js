@@ -1,11 +1,23 @@
 /* =========================================================================
-   Math Demon Hunters — front end.
+   Math Hunters — front end, shared by both trainers.
    Talks to the local Python API; all rendering and effects are done here.
+
+   Everything that differs between the trainers — the operator, the words, the
+   colours, which pairs the forge offers — comes from window.MathHunterGame,
+   which each game's game.js sets before this script runs.  Nothing in here
+   knows which operation it is drilling.
    ========================================================================= */
 (() => {
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+
+  /** This trainer's own settings; see web/<game>/game.js. */
+  const GAME = window.MathHunterGame;
+  const WORDS = GAME.words;
+  /** Preferences are namespaced, so the two trainers never read each other's. */
+  const pref = (name) => `${GAME.storage}-${name}`;
+
   const state = {
     rules: {
       mastery_target: 3, correct_points: 1, wrong_penalty: 2,
@@ -17,15 +29,15 @@
     pack: null, // name of the selected image pack
     history: [],
     series: null,
-    // Each side of the subtraction is either one number or a range.
-    modes: { m: "one", s: "range" },
-    allowNegative: localStorage.getItem("mdh-negative") === "on",
-    strategyOn: localStorage.getItem("mdh-strategy") !== "off",
-    timerEnabled: localStorage.getItem("mdh-timer") === "on",
-    timerSeconds: parseInt(localStorage.getItem("mdh-timer-seconds"), 10) || 10,
+    // Each side of the problem is either one number or a range.
+    modes: { ...GAME.sideModes },
+    allowNegative: localStorage.getItem(pref("negative")) === "on",
+    strategyOn: localStorage.getItem(pref("strategy")) !== "off",
+    timerEnabled: localStorage.getItem(pref("timer")) === "on",
+    timerSeconds: parseInt(localStorage.getItem(pref("timer-seconds")), 10) || 10,
     askedAt: 0,
     busy: false,
-    sound: localStorage.getItem("mdh-sound") !== "off",
+    sound: localStorage.getItem(pref("sound")) !== "off",
   };
 
   /* ----------------------------- API ----------------------------------- */
@@ -109,7 +121,7 @@
     };
 
     function spawn() {
-      const hues = ["rgba(255,203,61,", "rgba(34,229,255,", "rgba(255,46,151,", "rgba(139,59,255,"];
+      const hues = GAME.palette.embers;
       return {
         x: Math.random() * w, y: Math.random() * h,
         r: Math.random() * 2.4 + 0.6,
@@ -179,46 +191,21 @@
     };
   }
 
-  /** How many problems the ranges make — counted, not built: they multiply out fast. */
-  function poolCount({ m1, m2, s1, s2, allow_negative }) {
-    if (allow_negative) return (m2 - m1 + 1) * (s2 - s1 + 1);
-    let count = 0;
-    for (let m = m1; m <= m2; m++) count += Math.max(0, Math.min(s2, m) - s1 + 1);
-    return count;
-  }
-
-  /** Every pair in the pool, in the order the hunt board shows them. */
-  function poolPairs({ m1, m2, s1, s2, allow_negative }) {
-    const pairs = [];
-    for (let m = m1; m <= m2; m++) {
-      for (let s = s1; s <= s2; s++) {
-        if (allow_negative || m >= s) pairs.push([m, s]);
-      }
-    }
-    return pairs;
-  }
-
-  function validateForge(values) {
-    const { m1, m2, s1, s2 } = values;
-    const max = state.rules.max_operand;
-    if ([m1, m2, s1, s2].some((n) => n < 0 || n > max)) return `Numbers must be between 0 and ${max}.`;
-    if (m1 > m2) return "The start numbers have to go from low to high.";
-    if (s1 > s2) return "The take-away numbers have to go from low to high.";
-    const count = poolCount(values);
-    if (count === 0) {
-      return "Every pair there goes below zero — raise the start numbers, lower the take-aways, or allow answers below zero.";
-    }
-    if (count > state.rules.max_pool_size) {
-      return `Those ranges make ${count} problems — keep it to ${state.rules.max_pool_size} or fewer.`;
-    }
-    return null;
-  }
+  /**
+   * The pool the forge is describing.  Which pairs belong to it is the game's
+   * business (see game.js) — it mirrors the same rules the server enforces, so
+   * the preview never offers a hunt the server would refuse.
+   */
+  const poolPairs = (values) => GAME.pool.pairs(values);
+  const validateForge = (values) => GAME.pool.validate(values, state.rules);
 
   /** How a side reads in a label: one number, or a span. */
   const span = (low, high) => (low === high ? String(low) : `[${low}…${high}]`);
 
+  const problemText = (m, s) => `${m} ${GAME.glyph} ${s}`;
+
   function forgeLabel({ m1, m2, s1, s2 }) {
-    return `${span(m1, m2)} − ${span(s1, s2)}`;
+    return `${span(m1, m2)} ${GAME.glyph} ${span(s1, s2)}`;
   }
 
   function setSideMode(side, mode) {
@@ -237,10 +224,12 @@
     renderPreview();
   }
 
+  /** Only some trainers have anything below zero to allow. */
   function setAllowNegative(on) {
+    if (!GAME.negativeOption) return;
     state.allowNegative = !!on;
     $("negative-toggle").checked = state.allowNegative;
-    localStorage.setItem("mdh-negative", state.allowNegative ? "on" : "off");
+    localStorage.setItem(pref("negative"), state.allowNegative ? "on" : "off");
     renderPreview();
   }
 
@@ -274,12 +263,12 @@
     $("start-btn").style.opacity = "1";
 
     const pairs = poolPairs(values);
-    $("preview-count").textContent = `${pairs.length} demon${pairs.length === 1 ? "" : "s"} in this hunt`;
+    $("preview-count").textContent = WORDS.poolCount(pairs.length);
     $("forge-shape").textContent = forgeLabel(values);
-    pairs.forEach(([minuend, subtrahend], i) => {
+    pairs.forEach(([m, s], i) => {
       const chip = document.createElement("span");
       chip.className = "chip";
-      chip.textContent = `${minuend} − ${subtrahend}`;
+      chip.textContent = problemText(m, s);
       chip.style.animationDelay = `${i * 18}ms`;
       chips.appendChild(chip);
     });
@@ -294,7 +283,7 @@
 
   /** Do two payloads describe the same problem? */
   function samePair(a, b) {
-    return !!a && !!b && a.minuend === b.minuend && a.subtrahend === b.subtrahend;
+    return !!a && !!b && a.left === b.left && a.right === b.right;
   }
 
   /**
@@ -314,8 +303,8 @@
 
   function setPack(name) {
     state.pack = name;
-    if (name) localStorage.setItem("mdh-pack", name);
-    else localStorage.removeItem("mdh-pack");
+    if (name) localStorage.setItem(pref("pack"), name);
+    else localStorage.removeItem(pref("pack"));
     for (const chip of document.querySelectorAll(".pack-chip")) {
       chip.classList.toggle("pack-chip--on", (chip.dataset.pack || "") === (name || ""));
     }
@@ -336,7 +325,7 @@
       chip.dataset.pack = name || "";
       chip.innerHTML = thumb
         ? `<img src="${thumb}" alt="" loading="lazy" /><span>${label}</span><small>${count}</small>`
-        : `<span class="pack-chip__dot">👺</span><span>${label}</span>`;
+        : `<span class="pack-chip__dot">${WORDS.mark}</span><span>${label}</span>`;
       chip.addEventListener("click", () => { setPack(name); sfx("key"); });
       list.appendChild(chip);
     };
@@ -362,7 +351,7 @@
           <div class="hunt-card__ring">
             <svg viewBox="0 0 56 56">
               <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="5"/>
-              <circle cx="28" cy="28" r="24" fill="none" stroke="${s.is_mastered ? "#ffcb3d" : "#22e5ff"}"
+              <circle cx="28" cy="28" r="24" fill="none" stroke="${s.is_mastered ? GAME.palette.done : GAME.palette.going}"
                       stroke-width="5" stroke-linecap="round"
                       stroke-dasharray="${circumference}"
                       stroke-dashoffset="${circumference * (1 - pct / 100)}"/>
@@ -371,7 +360,7 @@
           </div>
           <div>
             <p class="hunt-card__name">${s.label}</p>
-            <p class="hunt-card__meta">${s.mastered_count}/${s.pool_size} sealed${s.completions ? ` · cleared ×${s.completions}` : ""}</p>
+            <p class="hunt-card__meta">${s.mastered_count}/${s.pool_size} ${WORDS.sealed}${s.completions ? ` · cleared ×${s.completions}` : ""}</p>
             <p class="hunt-card__meta">⏱ ${formatDuration(s.elapsed_ms)} · best combo ${s.best_streak}</p>
           </div>
         </div>
@@ -420,7 +409,7 @@
 
     const pct = s.points_possible ? (s.points_earned / s.points_possible) * 100 : 0;
     $("seal-fill").style.width = `${pct}%`;
-    $("seal-text").textContent = `${s.mastered_count} / ${s.pool_size} sealed`;
+    $("seal-text").textContent = `${s.mastered_count} / ${s.pool_size} ${WORDS.sealed}`;
 
     $("combo-n").textContent = s.streak;
     $("combo").dataset.level = s.streak >= 9 ? "3" : s.streak >= 5 ? "2" : s.streak >= 2 ? "1" : "0";
@@ -429,9 +418,13 @@
     renderBoard(s);
     renderStrategy(s.question);
 
+    // A miss keeps the same problem up for another try — mark it so the second
+    // go does not look like a brand-new question.
+    $("answer").closest(".equation").classList.toggle("equation--retry", !!s.retrying);
+
     if (s.question) {
-      $("eq-minuend").textContent = s.question.minuend;
-      $("eq-subtrahend").textContent = s.question.subtrahend;
+      $("eq-left").textContent = s.question.left;
+      $("eq-right").textContent = s.question.right;
       renderPips(s.question.points);
       renderPackCard(s.question);
       $("answer").value = "";
@@ -442,7 +435,7 @@
     }
   }
 
-  /** Swap in this problem's picture, or fall back to the drawn demon. */
+  /** Swap in this problem's picture, or fall back to the drawn foe. */
   function renderPackCard(question) {
     const card = $("pack-card");
     const url = imageFor(question);
@@ -555,7 +548,7 @@
     return true;
   }
 
-  /** Whichever artwork is on screen — the pack picture or the drawn demon. */
+  /** Whichever artwork is on screen — the pack picture or the drawn foe. */
   function visualTarget() {
     return $("pack-card").hidden ? $("demon") : $("pack-card");
   }
@@ -640,6 +633,9 @@
     stopClock();
     const s = state.series;
     if (!s || !s.timer_enabled || !s.question) return;
+    // No countdown on a correction: fixing an answer is not a speed test, and a
+    // clock that keeps expiring could never be answered right.
+    if (s.retrying) return;
 
     const total = s.timer_seconds * 1000;
     clockEndsAt = performance.now() + total;
@@ -767,40 +763,40 @@
 
   function playFeedback(result) {
     const equation = $("answer").closest(".equation");
-    const demon = visualTarget();
+    const foe = visualTarget();
 
     if (result.correct) {
       equation.classList.add("strike");
-      demon.classList.add("hurt");
-      setTimeout(() => { equation.classList.remove("strike"); demon.classList.remove("hurt"); }, 480);
+      foe.classList.add("hurt");
+      setTimeout(() => { equation.classList.remove("strike"); foe.classList.remove("hurt"); }, 480);
 
       const pip = $("pips").children[Math.max(0, result.points - 1)];
       if (pip) { pip.classList.add("filled", "pop"); setTimeout(() => pip.classList.remove("pop"), 520); }
 
       if (result.problem_mastered) {
-        flash("⟡ DEMON SEALED ⟡", "seal");
+        flash(WORDS.mastered, "seal");
         sfx("seal");
-        burstAt(demon, 34);
+        burstAt(foe, 34);
         $("pack-card").classList.add("pack-card--sealed");
       } else {
-        const praise = result.slow
-          ? ["GOT IT — now faster!", "Correct! Speed it up.", "Nice — quicker next time."]
-          : ["STRIKE! +1", "CLEAN HIT! +1", "NICE! +1", "SHARP! +1", "BOOM! +1"];
+        const praise = result.corrected ? WORDS.corrected : result.slow ? WORDS.slow : WORDS.praise;
         flash(praise[(Math.random() * praise.length) | 0], "good");
         sfx("correct");
-        burstAt(demon, 14);
+        burstAt(foe, 14);
       }
     } else {
       equation.classList.add("shake");
-      demon.classList.add("rage");
-      setTimeout(() => { equation.classList.remove("shake"); demon.classList.remove("rage"); }, 520);
+      foe.classList.add("rage");
+      setTimeout(() => { equation.classList.remove("shake"); foe.classList.remove("rage"); }, 520);
       renderPips(result.points);
       const lost = Math.abs(result.delta);
       const truth = `${result.text} = ${result.expected}`;
       const penalty = lost ? `−${lost}` : "0";
       let message = `${truth}  (${penalty})`;
-      if (result.timed_out) message = `⏳ TIME'S UP! ${truth}`;
-      else if (result.seal_broken) message = `THE SEAL CRACKED! ${truth}`;
+      if (result.timed_out) message = `${WORDS.timeUp} ${truth}`;
+      else if (result.seal_broken) message = `${WORDS.unsealed} ${truth}`;
+      // The same problem is about to come back, so say what to do with it.
+      if (result.retry) message += ` — ${WORDS.tryAgain}`;
       flash(message, "bad");
       sfx(result.timed_out ? "timeout" : "wrong");
     }
@@ -831,7 +827,7 @@
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const colors = ["#ffcb3d", "#22e5ff", "#ff2e97", "#8b3bff", "#fdf3ff"];
+    const colors = GAME.palette.burst;
     for (let i = 0; i < count; i++) {
       const dot = document.createElement("span");
       const angle = Math.random() * Math.PI * 2;
@@ -865,7 +861,7 @@
     canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
     canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
 
-    const colors = ["#ffcb3d", "#22e5ff", "#ff2e97", "#8b3bff", "#fdf3ff", "#ff6b4a"];
+    const colors = GAME.palette.confetti;
     const bits = Array.from({ length: 190 }, () => ({
       x: Math.random() * canvas.width,
       y: -Math.random() * canvas.height,
@@ -876,7 +872,7 @@
       rot: Math.random() * Math.PI,
       vr: (Math.random() - 0.5) * 0.22,
       c: colors[(Math.random() * colors.length) | 0],
-      talisman: Math.random() < 0.3,
+      charm: Math.random() < 0.3,
     }));
 
     cancelAnimationFrame(confettiTimer);
@@ -889,11 +885,11 @@
         g.save();
         g.translate(b.x, b.y);
         g.rotate(b.rot);
-        g.fillStyle = b.talisman ? "#ffcb3d" : b.c;
+        g.fillStyle = b.charm ? GAME.palette.charm : b.c;
         g.shadowBlur = 14; g.shadowColor = b.c;
         g.fillRect(-b.w / 2, -b.h / 2, b.w, b.h);
-        if (b.talisman) {
-          g.fillStyle = "rgba(180,20,60,.9)";
+        if (b.charm) {
+          g.fillStyle = GAME.palette.charmInk;
           g.fillRect(-b.w / 3, -b.h / 5, (b.w * 2) / 3, 1.6 * dpr);
           g.fillRect(-b.w / 3, b.h / 8, (b.w * 2) / 3, 1.6 * dpr);
         }
@@ -919,7 +915,7 @@
       .map((url, i) => `<img src="${url}" alt="" style="animation-delay:${i * 60}ms" />`)
       .join("");
     $("victory-stats").innerHTML = `
-      <div class="stat"><span class="stat__n">${s.pool_size}</span><span class="stat__l">demons sealed</span></div>
+      <div class="stat"><span class="stat__n">${s.pool_size}</span><span class="stat__l">${WORDS.victoryCount}</span></div>
       <div class="stat"><span class="stat__n">${formatDuration(s.elapsed_ms)}</span><span class="stat__l">hunt time</span></div>
       <div class="stat"><span class="stat__n">${accuracy}%</span><span class="stat__l">accuracy</span></div>
       <div class="stat"><span class="stat__n">${s.best_streak}</span><span class="stat__l">best combo</span></div>`;
@@ -957,7 +953,7 @@
 
     // --images is an explicit choice for this launch, so it wins; otherwise fall
     // back to whatever pack was last picked in the app.
-    const remembered = localStorage.getItem("mdh-pack");
+    const remembered = localStorage.getItem(pref("pack"));
     const names = state.packs.map((p) => p.name);
     state.pack = data.pack || (names.includes(remembered) ? remembered : null);
 
@@ -1020,15 +1016,18 @@
     strategyToggle.checked = state.strategyOn;
     strategyToggle.addEventListener("change", () => {
       state.strategyOn = strategyToggle.checked;
-      localStorage.setItem("mdh-strategy", state.strategyOn ? "on" : "off");
+      localStorage.setItem(pref("strategy"), state.strategyOn ? "on" : "off");
       if (state.series) renderStrategy(state.series.question);
       sfx("key");
     });
 
-    // Problems that would go below zero are left out unless asked for.
+    // Problems that would go below zero are left out unless asked for — a switch
+    // only the trainers that have anything below zero put on screen.
     const negativeToggle = $("negative-toggle");
-    negativeToggle.checked = state.allowNegative;
-    negativeToggle.addEventListener("change", () => { setAllowNegative(negativeToggle.checked); sfx("key"); });
+    if (negativeToggle) {
+      negativeToggle.checked = state.allowNegative;
+      negativeToggle.addEventListener("change", () => { setAllowNegative(negativeToggle.checked); sfx("key"); });
+    }
 
     // Countdown option
     const timerToggle = $("timer-toggle");
@@ -1037,7 +1036,7 @@
     $("timer-seconds-row").hidden = !state.timerEnabled;
     timerToggle.addEventListener("change", () => {
       state.timerEnabled = timerToggle.checked;
-      localStorage.setItem("mdh-timer", state.timerEnabled ? "on" : "off");
+      localStorage.setItem(pref("timer"), state.timerEnabled ? "on" : "off");
       $("timer-seconds-row").hidden = !state.timerEnabled;
       sfx("key");
     });
@@ -1052,7 +1051,7 @@
       const commit = (value) => {
         if (isTimer) {
           state.timerSeconds = value;
-          localStorage.setItem("mdh-timer-seconds", String(value));
+          localStorage.setItem(pref("timer-seconds"), String(value));
         } else {
           renderPreview();
         }
@@ -1118,7 +1117,7 @@
     toggle.setAttribute("aria-pressed", String(state.sound));
     toggle.addEventListener("click", () => {
       state.sound = !state.sound;
-      localStorage.setItem("mdh-sound", state.sound ? "on" : "off");
+      localStorage.setItem(pref("sound"), state.sound ? "on" : "off");
       toggle.setAttribute("aria-pressed", String(state.sound));
       if (state.sound) sfx("key");
     });

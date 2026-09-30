@@ -1,28 +1,14 @@
 /* =========================================================================
-   Math Demon Hunters — neon demon-hunter theme.
+   Shared layout for both trainers.
    All artwork here is drawn in CSS/SVG; nothing is loaded from the network.
+
+   Every colour comes from a custom property, and the properties themselves live
+   in each game's skin.css (loaded after this file) — so the same layout reads as
+   neon demon hunting or as a Sengoku-era shard hunt without touching this file.
+   Anything only one game draws — the subtraction number line, the jewel-shard
+   groups — lives in that game's skin too.
    ========================================================================= */
 
-:root {
-  --void: #07021a;
-  --indigo: #180a3d;
-  --violet: #8b3bff;
-  --magenta: #ff2e97;
-  --cyan: #22e5ff;
-  --gold: #ffcb3d;
-  --bone: #fdf3ff;
-  --muted: #b9a8e8;
-
-  --glass: rgba(32, 12, 74, 0.58);
-  --glass-line: rgba(255, 255, 255, 0.12);
-
-  --display: "Avenir Next Condensed", "Futura", "Oswald", Impact, sans-serif;
-  --body: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
-
-  --ring-cyan: 0 0 12px rgba(34, 229, 255, 0.75), 0 0 34px rgba(34, 229, 255, 0.35);
-  --ring-magenta: 0 0 12px rgba(255, 46, 151, 0.8), 0 0 40px rgba(255, 46, 151, 0.35);
-  --ring-gold: 0 0 14px rgba(255, 203, 61, 0.85), 0 0 46px rgba(255, 203, 61, 0.4);
-}
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -48,7 +34,7 @@ body { -webkit-font-smoothing: antialiased; }
     radial-gradient(60% 45% at 18% 12%, rgba(139, 59, 255, 0.45), transparent 60%),
     radial-gradient(55% 40% at 82% 22%, rgba(255, 46, 151, 0.38), transparent 62%),
     radial-gradient(70% 55% at 50% 96%, rgba(34, 229, 255, 0.22), transparent 65%),
-    linear-gradient(170deg, #180a3d 0%, #0d0428 45%, #07021a 100%);
+    var(--sky-deep);
   animation: wash 22s ease-in-out infinite alternate;
 }
 @keyframes wash { from { transform: scale(1) translateY(0); } to { transform: scale(1.08) translateY(-2%); } }
@@ -348,7 +334,7 @@ body { -webkit-font-smoothing: antialiased; }
 .btn:active { transform: scale(.96); }
 .btn--primary {
   background: linear-gradient(120deg, var(--gold), var(--magenta) 55%, var(--violet));
-  color: #14002b;
+  color: var(--ink);
   box-shadow: var(--ring-magenta), 0 12px 32px rgba(0,0,0,.45);
 }
 .btn--primary:hover { filter: brightness(1.12); box-shadow: var(--ring-gold), 0 14px 38px rgba(0,0,0,.5); }
@@ -395,7 +381,7 @@ body { -webkit-font-smoothing: antialiased; }
 .hud__center { flex: 1; min-width: 0; }
 .hud__label {
   font-family: var(--display); font-size: clamp(1rem, 3vw, 1.5rem);
-  letter-spacing: .1em; color: var(--bone); text-shadow: 0 0 18px rgba(139,59,255,.8);
+  letter-spacing: .1em; color: var(--bone); text-shadow: 0 0 18px var(--aura-strong);
 }
 .seal { margin-top: 7px; }
 .seal__bar {
@@ -439,7 +425,7 @@ body { -webkit-font-smoothing: antialiased; }
 @media (max-width: 760px) { .arena { grid-template-columns: 1fr; } }
 
 .arena__demon { display: grid; justify-items: center; gap: 10px; }
-.demon, .demon-art { width: min(260px, 60vw); filter: drop-shadow(0 18px 40px rgba(255,46,151,.35)); animation: float 4.6s ease-in-out infinite; }
+.demon, .demon-art { width: min(260px, 60vw); filter: drop-shadow(0 18px 40px var(--foe-shadow)); animation: float 4.6s ease-in-out infinite; }
 .demon-art { border-radius: 18px; }
 @keyframes float { 50% { transform: translateY(-14px) rotate(1.5deg); } }
 
@@ -470,12 +456,12 @@ body { -webkit-font-smoothing: antialiased; }
   border: 2px solid rgba(255,203,61,.55);
   box-shadow: var(--ring-magenta), 0 18px 46px rgba(0,0,0,.55);
   animation: float 4.6s ease-in-out infinite;
-  background: rgba(8,2,26,.7);
+  background: var(--pane-deep);
 }
 .pack-card__img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pack-card__glow {
   position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(160deg, rgba(139,59,255,.28), transparent 45%, rgba(255,46,151,.3));
+  background: var(--card-sheen);
   mix-blend-mode: screen;
 }
 .pack-card__seal {
@@ -543,7 +529,7 @@ body { -webkit-font-smoothing: antialiased; }
   border-radius: 20px;
   background: rgba(8, 2, 26, .62);
   border: 1px solid rgba(255,255,255,.14);
-  box-shadow: inset 0 0 46px rgba(139,59,255,.28), 0 18px 46px rgba(0,0,0,.45);
+  box-shadow: inset 0 0 46px var(--aura), 0 18px 46px rgba(0,0,0,.45);
 }
 .equation__a, .equation__b { color: var(--bone); text-shadow: 0 0 22px rgba(34,229,255,.75); }
 .equation__op, .equation__eq { color: var(--magenta); text-shadow: var(--ring-magenta); }
@@ -556,6 +542,11 @@ body { -webkit-font-smoothing: antialiased; }
 }
 .equation__input::placeholder { color: rgba(255,203,61,.3); }
 .equation__input:focus { border-bottom-color: var(--gold); }
+/* A correction round: the same problem is up again until it is answered right. */
+.equation--retry {
+  border-color: rgba(255,203,61,.5);
+  box-shadow: inset 0 0 46px rgba(255,203,61,.2), 0 18px 46px rgba(0,0,0,.45);
+}
 .equation.shake { animation: shake .42s cubic-bezier(.36,.07,.19,.97); }
 @keyframes shake {
   10%, 90% { transform: translateX(-4px); } 20%, 80% { transform: translateX(8px); }
@@ -563,9 +554,9 @@ body { -webkit-font-smoothing: antialiased; }
 }
 .equation.strike { animation: strike-flash .45s ease; }
 @keyframes strike-flash {
-  0% { box-shadow: inset 0 0 46px rgba(139,59,255,.28); }
+  0% { box-shadow: inset 0 0 46px var(--aura); }
   30% { box-shadow: inset 0 0 90px rgba(34,229,255,.85), 0 0 60px rgba(34,229,255,.6); }
-  100% { box-shadow: inset 0 0 46px rgba(139,59,255,.28); }
+  100% { box-shadow: inset 0 0 46px var(--aura); }
 }
 
 .flash { min-height: 44px; display: grid; place-items: center; text-align: center; }
@@ -585,8 +576,8 @@ body { -webkit-font-smoothing: antialiased; }
   padding: clamp(10px, 2vw, 16px);
   border-radius: 18px;
   border: 1px solid rgba(255,203,61,.26);
-  background: linear-gradient(180deg, rgba(22,7,52,.74), rgba(8,2,26,.66));
-  box-shadow: inset 0 0 40px rgba(139,59,255,.18);
+  background: var(--pane-soft);
+  box-shadow: inset 0 0 40px var(--aura-faint);
 }
 .strat__title {
   margin: 0; text-align: center;
@@ -600,56 +591,19 @@ body { -webkit-font-smoothing: antialiased; }
 .strat__picture { width: 100%; }
 .strat__picture .nl { max-width: 500px; margin: 0 auto; }
 
-/* ---- the number line ---- */
-
-.nl { display: block; width: 100%; height: auto; }
-.nl__line { stroke: rgba(255,255,255,.34); stroke-width: 3; stroke-linecap: round; }
-.nl__tick { stroke: rgba(255,255,255,.2); stroke-width: 2; }
-.nl__tick--big { stroke: rgba(255,255,255,.48); stroke-width: 3; }
-.nl__dot { fill: #0b0326; stroke-width: 3.5; stroke: var(--hop); }
-.nl__mark { font-family: var(--display); font-size: 27px; fill: var(--hop); }
-.nl__dot--cyan, .nl__mark--cyan { --hop: var(--cyan); }
-.nl__dot--magenta, .nl__mark--magenta { --hop: var(--magenta); }
-.nl__dot--gold, .nl__mark--gold { --hop: var(--gold); }
-.nl__dot--gold { fill: var(--gold); }
-
-/* A hop: dashed and dim until its little problem is answered. */
-.nl__hop--cyan { --hop: var(--cyan); }
-.nl__hop--magenta { --hop: var(--magenta); }
-.nl__arc {
-  fill: none; stroke: var(--hop); stroke-width: 4; stroke-linecap: round;
-  stroke-dasharray: 7 9; opacity: .5;
-  transition: opacity .3s;
-}
-.nl__tip { fill: var(--hop); opacity: .5; }
-.nl__hop.is-done .nl__arc { stroke-dasharray: none; opacity: 1; filter: drop-shadow(0 0 7px var(--hop)); }
-.nl__hop.is-done .nl__tip { opacity: 1; }
-.nl__hop:not(.is-done) .nl__chip { opacity: .72; }
-
-.nl__chip--cyan { --hop: var(--cyan); }
-.nl__chip--magenta { --hop: var(--magenta); }
-.nl__chip--gold { --hop: var(--gold); }
-.nl__chip rect { fill: rgba(8,2,26,.94); stroke: var(--hop); stroke-width: 3; }
-.nl__chip text { font-family: var(--display); font-size: 28px; fill: var(--hop); }
-
-/* The whole jump, end to end — that distance is the answer. */
-.nl__span { fill: none; stroke: rgba(255,203,61,.4); stroke-width: 2.5; stroke-dasharray: 6 7; }
-.nl__whole.is-done .nl__span { stroke: var(--gold); stroke-dasharray: none; }
-.nl__caption { font-family: var(--body); font-size: 15px; letter-spacing: 2px; fill: var(--muted); }
-.nl__whole:not(.is-done) .nl__chip { opacity: .5; }
-
-/* ---- the smaller problems ---- */
-
 .strat__steps { display: flex; align-items: center; justify-content: center; gap: clamp(8px, 2vw, 14px); flex-wrap: wrap; }
 .step {
   display: grid; gap: 2px; justify-items: center;
   padding: 6px 14px; border-radius: 14px; cursor: pointer;
   border: 1.5px solid rgba(255,255,255,.16);
-  background: rgba(8,2,26,.6);
+  background: var(--pane-mid);
   transition: border-color .25s, box-shadow .25s, background .25s;
 }
 .step--cyan { --hop: var(--cyan); }
 .step--magenta { --hop: var(--magenta); }
+.step--gold { --hop: var(--gold); }
+.step--violet { --hop: var(--violet); }
+.step--bone { --hop: var(--bone); }
 .step__eq { font-family: var(--display); font-size: 1rem; color: var(--bone); letter-spacing: .04em; }
 .step__input {
   width: 3ch; height: 38px; text-align: center;
@@ -691,7 +645,7 @@ body { -webkit-font-smoothing: antialiased; }
 .key--enter {
   grid-column: 1 / -1; font-size: 1.1rem !important; letter-spacing: .2em;
   background: linear-gradient(120deg, var(--gold), var(--magenta) 60%, var(--violet)) !important;
-  color: #14002b !important; border: none !important;
+  color: var(--ink) !important; border: none !important;
   box-shadow: var(--ring-magenta);
 }
 .key--enter:hover { filter: brightness(1.12); }

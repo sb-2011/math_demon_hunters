@@ -1,104 +1,29 @@
-"""End-to-end tests over the real HTTP server and the on-disk store."""
+"""End-to-end tests over the real HTTP server and the on-disk store.
+
+These cover the subtraction trainer; the multiplication one has its own module.
+The ``client`` fixture is in conftest.py.
+"""
 
 from __future__ import annotations
 
 import json
 import sys
-import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from helpers import (  # noqa: E402
+    PNG_BYTES,
+    answer_correctly,
+    make_pack,
+    solve_series,
+)
 from mathhunters import packs as packs_mod  # noqa: E402
 from mathhunters.engine import MASTERY_TARGET, MAX_POOL_SIZE  # noqa: E402
-from mathhunters.server import HunterServer, find_free_port  # noqa: E402
 from mathhunters.storage import Store  # noqa: E402
-
-
-PNG_BYTES = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-    "890000000a49444154789c6360000002000100ffff03000006000557bfabd400"
-    "00000049454e44ae426082"
-)
-
-
-def make_pack(images_root: Path, name: str, count: int) -> Path:
-    pack = images_root / name
-    pack.mkdir(parents=True, exist_ok=True)
-    for i in range(1, count + 1):
-        (pack / f"{i:02d}-pic.png").write_bytes(PNG_BYTES)
-    return pack
-
-
-@pytest.fixture()
-def client(tmp_path):
-    store = Store(tmp_path / "data")
-    assets_dir = tmp_path / "assets"
-    assets_dir.mkdir()
-    images_root = tmp_path / "images"
-    images_root.mkdir()
-    port = find_free_port("127.0.0.1", 8900)
-    httpd = HunterServer(("127.0.0.1", port), store, assets_dir, images_root, None)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-
-    base = f"http://127.0.0.1:{port}"
-
-    def call(method: str, path: str, body: dict | None = None):
-        data = json.dumps(body).encode() if body is not None else None
-        request = urllib.request.Request(base + path, data=data, method=method)
-        request.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                raw = response.read()
-                return response.status, json.loads(raw) if raw else None
-        except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            return exc.code, json.loads(raw) if raw else None
-
-    def raw(path: str):
-        try:
-            with urllib.request.urlopen(base + path, timeout=5) as response:
-                return response.status, response.headers.get("Content-Type", ""), response.read()
-        except urllib.error.HTTPError as exc:
-            return exc.code, exc.headers.get("Content-Type", ""), exc.read()
-
-    call.store = store  # type: ignore[attr-defined]
-    call.assets_dir = assets_dir  # type: ignore[attr-defined]
-    call.images_root = images_root  # type: ignore[attr-defined]
-    call.server = httpd  # type: ignore[attr-defined]
-    call.raw = raw  # type: ignore[attr-defined]
-    try:
-        yield call
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-
-
-def answer_correctly(client, payload: dict, elapsed_ms: int = 500):
-    """Answer the pending question of ``payload`` correctly."""
-    question = payload["question"]
-    assert question is not None, "no question was pending"
-    return client(
-        "POST",
-        f"/api/series/{payload['id']}/answer",
-        {"answer": question["minuend"] - question["subtrahend"], "elapsed_ms": elapsed_ms},
-    )
-
-
-def solve_series(client, payload: dict) -> dict:
-    """Answer correctly until the series is mastered."""
-    for _ in range(500):
-        status, payload = answer_correctly(client, payload)
-        assert status == 200
-        if payload["result"]["series_mastered"]:
-            return payload
-    raise AssertionError("series never reached mastery")
 
 
 # --- static files ------------------------------------------------------------
@@ -136,8 +61,8 @@ def test_one_start_number_asks_from_the_pool(client):
     assert status == 200
     assert data["id"] == "r10-10x0-9"
     assert data["pool_size"] == 10
-    assert data["question"]["minuend"] == 10
-    assert 0 <= data["question"]["subtrahend"] <= 9
+    assert data["question"]["left"] == 10
+    assert 0 <= data["question"]["right"] <= 9
     assert {p["text"] for p in data["problems"]} == {f"10 − {v}" for v in range(10)}
 
 
@@ -146,8 +71,8 @@ def test_one_take_away_asks_from_the_pool(client):
     assert status == 200
     assert data["id"] == "r5-12x3-3"
     assert data["pool_size"] == 8
-    assert data["question"]["subtrahend"] == 3
-    assert 5 <= data["question"]["minuend"] <= 12
+    assert data["question"]["right"] == 3
+    assert 5 <= data["question"]["left"] <= 12
     assert {p["text"] for p in data["problems"]} == {f"{v} − 3" for v in range(5, 13)}
 
 
@@ -165,7 +90,7 @@ def test_a_range_on_both_sides_asks_from_the_whole_grid(client):
 def test_pairs_below_zero_are_left_out_unless_asked_for(client):
     _, data = client("POST", "/api/series", {"m1": 0, "m2": 4, "s1": 0, "s2": 4})
     assert data["pool_size"] == 15
-    assert all(p["minuend"] >= p["subtrahend"] for p in data["problems"])
+    assert all(p["left"] >= p["right"] for p in data["problems"])
 
     _, allowed = client(
         "POST", "/api/series", {"m1": 0, "m2": 4, "s1": 0, "s2": 4, "allow_negative": True}
@@ -201,8 +126,42 @@ def test_a_wrong_answer_reports_the_expected_value(client):
     question = data["question"]
     _, data = client("POST", "/api/series/r10-10x0-9/answer", {"answer": 999})
     assert data["result"]["correct"] is False
-    assert data["result"]["expected"] == question["minuend"] - question["subtrahend"]
+    assert data["result"]["expected"] == question["left"] - question["right"]
     assert data["result"]["points"] == 0
+
+
+def test_a_wrong_answer_keeps_the_same_question_up(client):
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
+    asked = data["question"]["text"]
+
+    _, data = client("POST", "/api/series/r10-10x0-9/answer", {"answer": 999})
+    assert data["result"]["retry"] is True
+    assert data["question"]["text"] == asked, "the missed problem is asked again"
+    assert data["retrying"] is True
+
+    # Wrong a second time: still the same problem.
+    _, data = client("POST", "/api/series/r10-10x0-9/answer", {"answer": 998})
+    assert data["question"]["text"] == asked
+    assert data["retrying"] is True
+
+    # Right at last: back on one point, and the hunt moves on.
+    _, data = answer_correctly(client, data)
+    assert data["result"]["corrected"] is True
+    assert data["result"]["points"] == 1
+    assert data["retrying"] is False
+    assert data["question"]["text"] != asked
+
+
+def test_an_unfinished_correction_survives_reopening_the_app(client, tmp_path):
+    _, data = client("POST", "/api/series", {"m1": 10, "m2": 10, "s1": 0, "s2": 9})
+    _, data = client("POST", "/api/series/r10-10x0-9/answer", {"answer": 999})
+    asked = data["question"]["text"]
+
+    reopened = Store(tmp_path / "data")
+    series = reopened.get("r10-10x0-9")
+    assert series is not None
+    assert series.retrying is True
+    assert series.next_problem().text == asked
 
 
 def test_absurd_answers_are_rejected_rather_than_scored(client):
@@ -217,7 +176,7 @@ def test_negative_answers_are_accepted(client):
     _, data = client(
         "POST", "/api/series", {"m1": 2, "m2": 2, "s1": 0, "s2": 6, "allow_negative": True}
     )
-    assert min(p["minuend"] - p["subtrahend"] for p in data["problems"]) == -4
+    assert min(p["left"] - p["right"] for p in data["problems"]) == -4
     for _ in range(12):
         status, data = answer_correctly(client, data)
         assert status == 200
@@ -432,8 +391,8 @@ def test_a_timeout_is_scored_as_a_miss(client):
     assert status == 200
     assert data["result"]["correct"] is False
     assert data["result"]["timed_out"] is True
-    assert data["result"]["expected"] == question["minuend"] - question["subtrahend"]
-    assert data["question"] is not None
+    assert data["result"]["expected"] == question["left"] - question["right"]
+    assert data["question"]["text"] == question["text"], "the problem that ran out of time comes back"
 
 
 def test_a_timeout_needs_no_answer_field(client):

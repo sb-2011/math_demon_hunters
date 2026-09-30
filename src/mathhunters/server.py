@@ -1,8 +1,12 @@
-"""Standard-library HTTP server for the Math Demon Hunters UI.
+"""Standard-library HTTP server for the trainers' UI.
 
 No third-party dependencies: ``http.server`` serves the front end and a small
 JSON API.  The socket is bound to loopback only -- this is a local app for one
 kid at one desk, not something to expose on a network.
+
+One server runs one game (see :mod:`games`).  Static files are looked up in that
+game's skin folder first and in the shared ``web/`` folder second, so both
+trainers share one front-end script and differ only in their skins.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import assets as assets_mod
+from . import games as games_mod
 from . import packs as packs_mod
 from .engine import (
     CORRECT_POINTS,
@@ -32,6 +37,7 @@ from .engine import (
     Series,
     SeriesError,
     clamp_timer_seconds,
+    operation,
 )
 from .storage import Store
 
@@ -41,7 +47,8 @@ PROJECT_ROOT = PACKAGE_DIR.parents[1]
 ASSETS_DIR = PROJECT_ROOT / "assets"
 IMAGES_DIR = PROJECT_ROOT / "images"
 
-SERIES_ID_RE = re.compile(r"^r\d{1,3}-\d{1,3}x\d{1,3}-\d{1,3}(-neg)?$")
+# The leading letter is the operation's (see engine.Operation.id_prefix).
+SERIES_ID_RE = re.compile(r"^[a-z]\d{1,3}-\d{1,3}x\d{1,3}-\d{1,3}(-neg)?$")
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -73,9 +80,12 @@ class HunterServer(ThreadingHTTPServer):
         assets_dir: Path,
         images_root: Path | None = None,
         default_pack: str | None = None,
+        game: games_mod.Game | str | None = None,
     ) -> None:
         super().__init__(address, HunterHandler)
         self.store = store
+        # A store already belongs to a game; naming one here is for tests.
+        self.game = games_mod.get(game if game is not None else store.game)
         self.assets_dir = assets_dir
         self.images_root = images_root or IMAGES_DIR
         self.default_pack = default_pack
@@ -90,6 +100,10 @@ class HunterHandler(BaseHTTPRequestHandler):
     @property
     def store(self) -> Store:
         return self.server.store  # type: ignore[attr-defined]
+
+    @property
+    def game(self) -> games_mod.Game:
+        return self.server.game  # type: ignore[attr-defined]
 
     @property
     def assets_dir(self) -> Path:
@@ -247,6 +261,12 @@ class HunterHandler(BaseHTTPRequestHandler):
         packs = packs_mod.list_packs(self.images_root)
         names = {pack["name"] for pack in packs}
         return {
+            "game": {
+                "id": self.game.id,
+                "op": self.game.op,
+                "title": self.game.title,
+                "glyph": operation(self.game.op).glyph,
+            },
             "series": [s.summary() for s in self.store.all_series()],
             "assets": assets_mod.scan(self.assets_dir),
             "packs": packs,
@@ -265,11 +285,12 @@ class HunterHandler(BaseHTTPRequestHandler):
 
     def _start_series(self, body: dict[str, Any]) -> dict[str, Any]:
         # Either side may be a range; a side pinned to one number just sends the
-        # same value twice.
-        m1 = _as_int(body.get("m1"), "the lowest start number")
-        m2 = _as_int(body.get("m2"), "the highest start number")
-        s1 = _as_int(body.get("s1"), "the smallest take-away")
-        s2 = _as_int(body.get("s2"), "the largest take-away")
+        # same value twice.  What the sides are called depends on the operation.
+        labels = operation(self.game.op).labels
+        m1 = _as_int(body.get("m1"), labels["m1"])
+        m2 = _as_int(body.get("m2"), labels["m2"])
+        s1 = _as_int(body.get("s1"), labels["s1"])
+        s2 = _as_int(body.get("s2"), labels["s2"])
         allow_negative = bool(body.get("allow_negative"))
         restart = bool(body.get("restart"))
 
@@ -332,11 +353,21 @@ class HunterHandler(BaseHTTPRequestHandler):
     # -- static files ---------------------------------------------------------
 
     def _serve_static(self, relative: str) -> None:
-        target = _safe_join(WEB_DIR, relative)
-        if target is None or not target.is_file():
+        """Serve a front-end file: this game's skin wins, the shared copy backs it.
+
+        Both are flat folders of files, so a path with a folder in it is asking
+        for something that is not this game's to serve -- the other game's skin,
+        say -- and is refused rather than resolved.
+        """
+        if "/" in relative:
             raise ApiError("not found", HTTPStatus.NOT_FOUND)
-        content_type = STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
-        self._send(HTTPStatus.OK, target.read_bytes(), content_type)
+        for root in (WEB_DIR / self.game.web_dir, WEB_DIR):
+            target = _safe_join(root, relative)
+            if target is not None and target.is_file():
+                content_type = STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+                self._send(HTTPStatus.OK, target.read_bytes(), content_type)
+                return
+        raise ApiError("not found", HTTPStatus.NOT_FOUND)
 
     def _serve_pack_image(self, relative: str) -> None:
         """Serve ``/pack/<pack-name>/<file>`` out of the images root."""
@@ -408,16 +439,24 @@ def find_free_port(host: str, preferred: int, attempts: int = 25) -> int:
     raise SystemExit(f"Could not find a free port near {preferred}.")
 
 
+def game_assets_dir(game: games_mod.Game, root: Path | None = None) -> Path:
+    """Where this game looks for drop-in artwork, under the shared assets root."""
+    base = Path(root) if root else ASSETS_DIR
+    return base / game.assets_dir if game.assets_dir else base
+
+
 def serve(
     host: str = "127.0.0.1",
-    port: int = 8765,
+    port: int | None = None,
     data_dir: Path | None = None,
     assets_dir: Path | None = None,
     images: Path | None = None,
     open_browser: bool = True,
+    game: games_mod.Game | str | None = None,
 ) -> None:
-    store = Store(data_dir)
-    resolved_assets = Path(assets_dir) if assets_dir else ASSETS_DIR
+    resolved_game = games_mod.get(game)
+    store = Store(data_dir, game=resolved_game)
+    resolved_assets = Path(assets_dir) if assets_dir else game_assets_dir(resolved_game)
 
     # --images points at one pack folder; its parent becomes the images root so
     # sibling packs can be switched to from the home screen without a restart.
@@ -426,15 +465,18 @@ def serve(
         default_pack = packs_mod.resolve_selection(images)
         images_root = Path(images).expanduser().resolve().parent
 
-    resolved_port = find_free_port(host, port)
-    httpd = HunterServer((host, resolved_port), store, resolved_assets, images_root, default_pack)
+    resolved_port = find_free_port(host, port if port is not None else resolved_game.port)
+    httpd = HunterServer(
+        (host, resolved_port), store, resolved_assets, images_root, default_pack, resolved_game
+    )
     url = f"http://{host}:{resolved_port}/"
 
     found_assets = assets_mod.scan(resolved_assets)
     available = packs_mod.list_packs(images_root)
     selected = next((p for p in available if p["name"] == default_pack), None)
 
-    print("\n  \033[95m✦ MATH DEMON HUNTERS ✦\033[0m")
+    print(f"\n  \033[95m✦ {resolved_game.title} ✦\033[0m")
+    print(f"  {resolved_game.tagline}")
     print(f"  playing at  {url}")
     print(f"  progress    {store.path}")
     print(f"  artwork     {len(found_assets)} custom file(s) in {resolved_assets}")

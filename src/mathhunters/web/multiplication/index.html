@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="night">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Math Jewel Hunters</title>
+<link rel="stylesheet" href="/static/theme.css" />
+<link rel="stylesheet" href="/static/skin.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔮</text></svg>" />
+</head>
+<body>
+
+<!-- ============ ambient background ============ -->
+<div class="sky" aria-hidden="true">
+  <div class="sky__wash"></div>
+  <div class="sky__honmoon"></div>
+  <div class="sky__honmoon sky__honmoon--two"></div>
+  <canvas id="embers" class="sky__embers"></canvas>
+  <!-- Forest hills under the barrier, with a shrine roof on the ridge. -->
+  <div class="sky__skyline">
+    <svg viewBox="0 0 1440 220" preserveAspectRatio="none">
+      <path d="M0 220V128c58-34 96 4 150-18 52-22 84-58 142-58 56 0 92 40 140 54 34 10 56-6 86-22 36-20 74-26 112-10 44 18 66 58 112 58 44 0 72-34 114-52 46-20 86-4 128 18 40 20 70 44 116 40 44-4 76-32 120-32 40 0 72 20 120 44v130H0z" fill="url(#hills)"/>
+      <path d="M598 122h244l-40-26h-164zM672 122h96v40h-96zM700 132h40v30h-40z" fill="#0a1f1c" opacity=".9"/>
+      <path d="M560 96h320l-28-16H588z" fill="#132f2a"/>
+      <defs>
+        <linearGradient id="hills" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#1c4a3d"/><stop offset="100%" stop-color="#060f0e"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  </div>
+  <div class="sky__talismans">
+    <span class="talisman" style="--x:8%;  --d:0s;    --s:.8"></span>
+    <span class="talisman" style="--x:24%; --d:-5.5s; --s:1.1"></span>
+    <span class="talisman" style="--x:49%; --d:-2.7s; --s:.7"></span>
+    <span class="talisman" style="--x:71%; --d:-8.2s; --s:1"></span>
+    <span class="talisman" style="--x:91%; --d:-4.1s; --s:.85"></span>
+  </div>
+</div>
+
+<button id="sound-toggle" class="sound-toggle" type="button" aria-pressed="true" title="Toggle sound">
+  <span class="sound-toggle__on">♪</span><span class="sound-toggle__off">✕</span>
+</button>
+
+<!-- ============ HOME ============ -->
+<main id="screen-home" class="screen screen--active">
+  <header class="crest">
+    <img id="logo-art" class="crest__art" alt="" hidden />
+    <h1 class="crest__title" data-text="MATH JEWEL HUNTERS">MATH<span>JEWEL</span>HUNTERS</h1>
+    <p class="crest__sub">Claim every shard. One times table at a time.</p>
+  </header>
+
+  <section class="panel panel--forge">
+    <h2 class="panel__title">⟡ Forge a Hunt</h2>
+
+    <div class="forge">
+      <div class="sides">
+        <div class="side" data-side="m" data-mode="one">
+          <span class="side__title">How many groups</span>
+          <div class="side__modes" role="radiogroup" aria-label="How many groups: one number or a range">
+            <button type="button" class="side__mode side__mode--on" data-mode="one" role="radio" aria-checked="true">One number</button>
+            <button type="button" class="side__mode" data-mode="range" role="radio" aria-checked="false">A range</button>
+          </div>
+          <div class="side__fields">
+            <label class="stepper" data-field="m1">
+              <span class="stepper__label" data-role="first-label">Number</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="fewer groups">−</button>
+                <input id="input-m1" class="stepper__input" type="text" inputmode="numeric" value="3" aria-label="Smallest number of groups" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="more groups">+</button>
+              </span>
+            </label>
+            <span class="side__dash" data-role="dash">→</span>
+            <label class="stepper stepper--to" data-field="m2">
+              <span class="stepper__label">To</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease largest number of groups">−</button>
+                <input id="input-m2" class="stepper__input" type="text" inputmode="numeric" value="4" aria-label="Largest number of groups" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase largest number of groups">+</button>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <span class="sides__op" aria-hidden="true">×</span>
+
+        <div class="side" data-side="s" data-mode="range">
+          <span class="side__title">In each group</span>
+          <div class="side__modes" role="radiogroup" aria-label="In each group: one number or a range">
+            <button type="button" class="side__mode" data-mode="one" role="radio" aria-checked="false">One number</button>
+            <button type="button" class="side__mode side__mode--on" data-mode="range" role="radio" aria-checked="true">A range</button>
+          </div>
+          <div class="side__fields">
+            <label class="stepper" data-field="s1">
+              <span class="stepper__label" data-role="first-label">From</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease smallest group size">−</button>
+                <input id="input-s1" class="stepper__input" type="text" inputmode="numeric" value="1" aria-label="Smallest group size" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase smallest group size">+</button>
+              </span>
+            </label>
+            <span class="side__dash" data-role="dash">→</span>
+            <label class="stepper stepper--to" data-field="s2">
+              <span class="stepper__label">To</span>
+              <span class="stepper__controls">
+                <button type="button" class="stepper__btn" data-step="-1" aria-label="decrease largest group size">−</button>
+                <input id="input-s2" class="stepper__input" type="text" inputmode="numeric" value="10" aria-label="Largest group size" />
+                <button type="button" class="stepper__btn" data-step="1" aria-label="increase largest group size">+</button>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <p class="forge__shape" id="forge-shape">3 × [1…10]</p>
+
+      <div class="preview">
+        <span class="preview__label" id="preview-count">10 shards in this hunt</span>
+        <div class="preview__chips" id="preview-chips"></div>
+      </div>
+
+      <div class="options">
+        <label class="switch">
+          <input type="checkbox" id="strategy-toggle" checked />
+          <span class="switch__track"><span class="switch__knob"></span></span>
+          <span class="switch__text">
+            <b>Show the strategy picture</b>
+            <small>When a problem can be drawn as equal groups — piles of jewel shards — draw it, with a pile to count for each group</small>
+          </span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="timer-toggle" />
+          <span class="switch__track"><span class="switch__knob"></span></span>
+          <span class="switch__text">
+            <b>Beat the clock</b>
+            <small>Each problem gets a countdown — running out costs points like a wrong answer</small>
+          </span>
+        </label>
+        <label class="stepper stepper--inline" data-field="timer" id="timer-seconds-row" hidden>
+          <span class="stepper__label">Seconds per problem</span>
+          <span class="stepper__controls">
+            <button type="button" class="stepper__btn" data-step="-1" aria-label="less time">−</button>
+            <input id="input-timer" class="stepper__input stepper__input--small" type="text" inputmode="numeric" value="10" aria-label="Seconds per problem" />
+            <button type="button" class="stepper__btn" data-step="1" aria-label="more time">+</button>
+          </span>
+        </label>
+      </div>
+
+      <div class="packs" id="packs-row" hidden>
+        <span class="packs__label">Picture pack</span>
+        <div class="packs__list" id="packs-list"></div>
+      </div>
+
+      <p class="forge__error" id="forge-error" role="alert" hidden></p>
+
+      <button id="start-btn" class="btn btn--primary btn--huge" type="button">
+        <span>BEGIN THE HUNT</span>
+      </button>
+
+      <p class="forge__rules">
+        Right answer <b class="good">+1</b> · Wrong answer <b class="bad">−2</b> · Never below 0 ·
+        Purify a shard at <b class="gold" id="rule-target">3</b> points
+      </p>
+    </div>
+  </section>
+
+  <section class="panel panel--history">
+    <h2 class="panel__title">⟡ Past Hunts</h2>
+    <div id="history" class="history"></div>
+    <p id="history-empty" class="history__empty">No hunts yet. Forge one above and go get them.</p>
+  </section>
+</main>
+
+<!-- ============ PLAY ============ -->
+<main id="screen-play" class="screen">
+  <header class="hud">
+    <button id="back-btn" class="btn btn--ghost btn--small" type="button">← CAMP</button>
+    <div class="hud__center">
+      <div class="hud__label" id="play-label">3 × [1…10]</div>
+      <div class="seal">
+        <div class="seal__bar"><i id="seal-fill" style="width:0%"></i></div>
+        <span class="seal__text" id="seal-text">0 / 10 purified</span>
+      </div>
+    </div>
+    <div class="hud__meters">
+      <div class="session" id="session" title="Time spent on this hunt — pauses back at camp">
+        <span class="session__x">TIME</span><span class="session__n" id="session-n">0:00</span>
+      </div>
+      <div class="combo" id="combo" data-level="0">
+        <span class="combo__x">COMBO</span><span class="combo__n" id="combo-n">0</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="arena">
+    <div class="arena__demon">
+      <!-- Shown when an image pack is active: one picture bound to this problem. -->
+      <figure id="pack-card" class="pack-card" hidden>
+        <img id="pack-img" class="pack-card__img" alt="" />
+        <span class="pack-card__seal" id="pack-seal">PURE</span>
+        <span class="pack-card__glow"></span>
+      </figure>
+
+      <img id="demon-art" class="demon-art" alt="" hidden />
+      <!-- The youkai guarding this shard, drawn as a mask. -->
+      <svg id="demon" class="demon" viewBox="0 0 200 220" role="img" aria-label="Youkai guarding a shard">
+        <defs>
+          <radialGradient id="maskSkin" cx="50%" cy="38%" r="72%">
+            <stop offset="0%" stop-color="#ff6a7f"/><stop offset="55%" stop-color="#a81f3c"/><stop offset="100%" stop-color="#2c0c1c"/>
+          </radialGradient>
+          <linearGradient id="fangGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#fffaf0"/><stop offset="100%" stop-color="#cdbb92"/>
+          </linearGradient>
+          <filter id="demonGlow"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <g class="demon__body" filter="url(#demonGlow)">
+          <!-- Ears, laid back flat the way a dog-youkai holds them. -->
+          <path class="demon__horn" d="M50 64C34 48 26 28 34 12c16 8 28 26 34 46z" fill="url(#fangGrad)"/>
+          <path class="demon__horn" d="M150 64c16-16 24-36 16-52-16 8-28 26-34 46z" fill="url(#fangGrad)"/>
+          <path class="demon__face" d="M100 26c40 0 62 26 62 68 0 52-28 100-62 100S38 146 38 94c0-42 22-68 62-68z" fill="url(#maskSkin)"/>
+          <!-- War stripes across the cheeks. -->
+          <path d="M44 96l34 8-34 6zM156 96l-34 8 34 6z" fill="#56dfb4" opacity=".75"/>
+          <path class="demon__brow" d="M56 84l40 16-40 6z" fill="#1c0510"/>
+          <path class="demon__brow" d="M144 84l-40 16 40 6z" fill="#1c0510"/>
+          <ellipse class="demon__eye" cx="72" cy="104" rx="11" ry="9" fill="#ffcf6b"/>
+          <ellipse class="demon__eye" cx="128" cy="104" rx="11" ry="9" fill="#ffcf6b"/>
+          <ellipse cx="72" cy="104" rx="4" ry="7" fill="#2c0c1c"/>
+          <ellipse cx="128" cy="104" rx="4" ry="7" fill="#2c0c1c"/>
+          <path class="demon__mouth" d="M64 146c12 14 60 14 72 0-6 22-24 34-36 34s-30-12-36-34z" fill="#1c0510"/>
+          <path d="M74 150l6 12 7-12zM113 150l7 12 6-12z" fill="url(#fangGrad)"/>
+        </g>
+        <!-- Each purified shard is another crack of light through the youkai. -->
+        <g class="demon__cracks" stroke="#ffe9a8" stroke-linecap="round" fill="none">
+          <path data-crack="0" d="M100 30 96 70 108 96 98 128" stroke-width="2.4"/>
+          <path data-crack="1" d="M62 62 78 92 66 118 80 150" stroke-width="2.1"/>
+          <path data-crack="2" d="M140 66 124 94 136 120 122 152" stroke-width="2.1"/>
+          <path data-crack="3" d="M46 104 70 122 56 148 74 170" stroke-width="1.9"/>
+          <path data-crack="4" d="M156 108 132 126 146 150 128 172" stroke-width="1.9"/>
+          <path data-crack="5" d="M86 176 100 196 116 174" stroke-width="2.2"/>
+        </g>
+      </svg>
+      <div class="arena__hint" id="arena-hint">Purify every shard to make the jewel whole</div>
+    </div>
+
+    <div class="arena__problem">
+      <div class="clock" id="clock" hidden>
+        <div class="clock__bar"><i id="clock-fill"></i></div>
+        <span class="clock__num" id="clock-num">10</span>
+      </div>
+      <div class="pips" id="pips" aria-label="Points on this problem"></div>
+      <div class="equation">
+        <span class="equation__a" id="eq-left">3</span>
+        <span class="equation__op">×</span>
+        <span class="equation__b" id="eq-right">4</span>
+        <span class="equation__eq">=</span>
+        <input id="answer" class="equation__input" type="text" inputmode="none" autocomplete="off"
+               spellcheck="false" maxlength="4" placeholder="?" aria-label="Your answer" />
+      </div>
+      <div class="flash" id="flash" aria-live="polite"></div>
+
+      <!-- Shown only when a strategy covers this problem (see strategies.js). -->
+      <section id="strategy" class="strat" hidden>
+        <h3 class="strat__title" id="strat-title"></h3>
+        <p class="strat__caption" id="strat-caption"></p>
+        <div class="strat__picture" id="strat-picture"></div>
+        <div class="strat__steps" id="strat-steps"></div>
+        <p class="strat__sum" id="strat-sum"></p>
+      </section>
+
+      <div class="keypad" id="keypad">
+        <button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button>
+        <button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button>
+        <button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button>
+        <button type="button" data-key="-" class="key--alt">−</button>
+        <button type="button" data-key="0">0</button>
+        <button type="button" data-key="del" class="key--alt">⌫</button>
+        <button type="button" data-key="enter" class="key--enter">SLASH</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="board">
+    <h3 class="board__title">Shard Board <span class="board__hint">— purified shards still come back to test you</span></h3>
+    <div class="board__grid" id="board"></div>
+  </section>
+</main>
+
+<!-- ============ VICTORY ============ -->
+<div id="victory" class="victory" aria-hidden="true">
+  <canvas id="confetti" class="victory__confetti"></canvas>
+  <div class="victory__inner">
+    <img id="victory-art" class="victory__art" alt="" hidden />
+    <div class="victory__seal">
+      <!-- The Shikon Jewel, whole again: four shards curled around one centre. -->
+      <svg viewBox="0 0 200 200" class="victory__sigil">
+        <circle cx="100" cy="100" r="88" fill="none" stroke="#ffcf6b" stroke-width="3" stroke-dasharray="10 8"/>
+        <circle cx="100" cy="100" r="66" fill="none" stroke="#56dfb4" stroke-width="2"/>
+        <g fill="none" stroke="#ff456f" stroke-width="4" stroke-linecap="round">
+          <g><circle cx="100" cy="66" r="13" fill="#ff456f" stroke="none"/><path d="M100 79q0 20-16 27"/></g>
+          <g transform="rotate(90 100 100)"><circle cx="100" cy="66" r="13" fill="#ff456f" stroke="none"/><path d="M100 79q0 20-16 27"/></g>
+          <g transform="rotate(180 100 100)"><circle cx="100" cy="66" r="13" fill="#ff456f" stroke="none"/><path d="M100 79q0 20-16 27"/></g>
+          <g transform="rotate(270 100 100)"><circle cx="100" cy="66" r="13" fill="#ff456f" stroke="none"/><path d="M100 79q0 20-16 27"/></g>
+        </g>
+        <circle cx="100" cy="100" r="9" fill="#ffcf6b"/>
+      </svg>
+    </div>
+    <h2 class="victory__title" data-text="THE JEWEL IS WHOLE">THE JEWEL IS WHOLE</h2>
+    <p class="victory__series" id="victory-series">3 × [1…10]</p>
+    <div class="victory__gallery" id="victory-gallery" hidden></div>
+    <div class="victory__stats" id="victory-stats"></div>
+    <button id="victory-btn" class="btn btn--primary btn--huge" type="button">RETURN TO CAMP</button>
+    <p class="victory__hint">take your time — nothing happens until you click</p>
+  </div>
+</div>
+
+<script src="/static/game.js"></script>
+<script src="/static/strategies.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

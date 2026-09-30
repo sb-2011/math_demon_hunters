@@ -36,12 +36,13 @@
     id: "bridge-ten",
     title: `BRIDGE THROUGH ${TEN}`,
 
-    applies: (q) =>
-      q.minuend >= 11 && q.minuend <= 20 && q.subtrahend >= 1 && q.subtrahend <= 9,
+    // The question arrives as ``left`` and ``right``: here, the minuend and the
+    // number taken away from it.
+    applies: (q) => q.left >= 11 && q.left <= 20 && q.right >= 1 && q.right <= 9,
 
     plan(q) {
-      const lo = q.subtrahend;
-      const hi = q.minuend;
+      const lo = q.right;
+      const hi = q.left;
       const steps = [
         { text: `${TEN} ${MINUS} ${lo}`, expected: TEN - lo, tint: "cyan", from: lo, to: TEN },
         { text: `${hi} ${MINUS} ${TEN}`, expected: hi - TEN, tint: "magenta", from: TEN, to: hi },
