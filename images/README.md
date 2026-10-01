@@ -16,8 +16,7 @@ without restarting.
 images/
 ├── kpop-demon-hunters/     ← python3 play.py --images images/kpop-demon-hunters
 │   ├── 01-rumi.jpg
-│   ├── 02-mira.jpg
-│   └── CREDITS.md
+│   └── 02-mira.jpg
 ├── inuyasha/               ← make one like this for the multiplication hunt
 └── example-theme/          ← copy this shape for a new show or topic
 ```
@@ -61,6 +60,10 @@ python3 scripts/fetch_images.py my-theme --source urls --urls-file picks.txt
 
 Without `--shuffle` the `anime` source gives you the best-loved characters in
 order, which is usually the main cast; with it you get a different mix each run.
+
+A pack folder holds pictures and nothing else — the script clears out any
+`CREDITS.md` from an earlier run. Where each picture came from is printed as it
+downloads, so copy that out of the terminal if you want to keep it.
 
 Or just drag image files into a folder here — nothing else is required.
 

@@ -294,7 +294,7 @@ images/
 > Don't do that on a public repo — see the note at the end of this section.
 
 Each problem is bound to one picture **by its position in the pool**, so
-`10 − 7` always shows the same image for the whole hunt. That's deliberate: the
+`10 − 7` (or `3 × 7`) always shows the same image for the whole hunt. That's deliberate: the
 picture becomes a second retrieval cue alongside the numbers. The picture is the
 card you face, it takes the hit on a correct answer, a gold **SEALED** stamp
 slams onto it at 3 points, and every picture from the hunt reappears in the
@@ -303,25 +303,33 @@ victory gallery. A pack smaller than the pool just repeats.
 ### Getting pictures
 
 ```bash
+# A show's own artwork — its cover, its banner, a portrait per character.
+# Searched by title through AniList's public API: no key, no setup.
+# --shuffle takes the count at random out of everything found (--seed repeats it).
+python3 scripts/fetch_images.py inuyasha -q "Inuyasha" -n 10 --source anime --shuffle
+
 # Google image search — the official Custom Search JSON API.
 # Needs two free credentials once: python3 scripts/fetch_images.py --help-google
 python3 scripts/fetch_images.py kpop-demon-hunters -q "Kpop Demon Hunters movie" -n 12
 
-# Openly licensed images — no key, no setup
+# Openly licensed images — no key, no setup, but fan photos rather than the show
 python3 scripts/fetch_images.py space -q "nebula" -n 10 --source openverse
 
 # URLs you picked by hand (right-click → copy image address)
 python3 scripts/fetch_images.py my-theme --source urls --urls-file picks.txt
 ```
 
-The script writes a `CREDITS.md` in the pack recording where each file came from.
+A pack folder holds pictures and nothing else: the script prints where each file
+came from as it downloads, and clears out any `CREDITS.md` left by an earlier run.
 Dragging image files into a folder works just as well.
 
 **Why not scrape Google Images?** There's no public endpoint for it and scraping
 the results page violates Google's terms (and breaks whenever the markup
 changes). The Custom Search JSON API is the supported route and its free tier —
-100 queries/day, ~1000 images — is far more than this needs. Openverse is there
-for when you want something with a clean licence and zero setup.
+100 queries/day, ~1000 images — is far more than this needs. For an anime pack
+the `anime` source is better anyway: it asks for one show by name and gets that
+show's cast, which is what a pack wants. Openverse is there for when you want
+something with a clean licence and zero setup.
 
 **On movie stills:** frames from a film belong to the studio. A handful saved
 locally so your own kid can practise subtraction is ordinary personal use;

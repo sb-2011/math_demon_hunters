@@ -30,8 +30,10 @@ Four sources, chosen with ``--source``:
 ``--shuffle`` takes the requested number at random out of everything a search
 turned up, instead of the top results in order — a different pack each run.
 
-Every download writes a ``CREDITS.md`` in the pack folder recording where each
-file came from.  Downloaded images are ignored by git.
+A pack folder holds pictures and nothing else: any ``CREDITS.md`` left by an
+earlier run is cleared out after a download.  Downloaded images are ignored by
+git.  Where each picture came from is printed as it is saved, so copy that out
+of the terminal if you need to keep it.
 
 Note on movie stills: frames from a film are copyrighted by the studio.  Using a
 handful locally so your own kid can practise subtraction is ordinary personal
@@ -301,6 +303,9 @@ def download(results: list[dict], pack_dir: Path, query: str) -> list[dict]:
             (pack_dir / name).write_bytes(data)
             saved.append({**item, "file": name})
             print(f"  {label} saved {name}  ({len(data) // 1024}KB)")
+            # Nothing records this on disk, so say it here while it is known.
+            if item.get("source"):
+                print(f"         from {item['source']}")
         except (FetchError, urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError) as exc:
             print(f"  {label} skipped — {exc}")
         time.sleep(0.2)
@@ -308,19 +313,13 @@ def download(results: list[dict], pack_dir: Path, query: str) -> list[dict]:
     return saved
 
 
-def write_credits(pack_dir: Path, query: str, source: str, saved: list[dict]) -> None:
+def drop_credits(pack_dir: Path) -> bool:
+    """Leave the pack as pictures only, clearing any credits file in it."""
     credits = pack_dir / "CREDITS.md"
-    lines = []
-    if not credits.exists():
-        lines.append(f"# Image credits — {pack_dir.name}\n")
-        lines.append("Where each picture in this pack came from.\n")
-    lines.append(f"\n## {time.strftime('%Y-%m-%d %H:%M')} · {source} · \"{query}\"\n")
-    for item in saved:
-        lines.append(f"- `{item['file']}` — {item.get('license') or 'unknown licence'}")
-        if item.get("source"):
-            lines.append(f"  - source: {item['source']}")
-    with credits.open("a", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
+    if not credits.is_file():
+        return False
+    credits.unlink()
+    return True
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -402,10 +401,11 @@ def main(argv: list[str] | None = None) -> int:
 
     saved = download(results, pack_dir, args.query or args.pack)
     if saved:
-        write_credits(pack_dir, args.query or "(url list)", args.source, saved)
+        removed = drop_credits(pack_dir)
         total = len([p for p in pack_dir.iterdir() if p.suffix.lower() in ALLOWED_TYPES.values()])
         print(f"\n  {len(saved)} new image(s); {total} in the pack")
-        print(f"  credits written to {pack_dir / 'CREDITS.md'}")
+        if removed:
+            print("  removed the CREDITS.md left in this pack")
         print(f"\n  play with it:\n    python3 play.py --images {pack_dir}\n")
         return 0
 
